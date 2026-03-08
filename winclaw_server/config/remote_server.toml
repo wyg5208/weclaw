@@ -1,0 +1,81 @@
+# WinClaw 远程服务配置
+# WinClaw Remote Server Configuration
+
+[server]
+# 服务器配置
+host = "0.0.0.0"
+port = 8188
+debug = false
+
+[database]
+# 数据库配置
+# type: "mysql" 或 "sqlite"
+type = "mysql"
+host = "localhost"
+port = 3306
+user = "winclaw_user"
+password = "winclaw_user_20260221"
+database = "winclaw"
+pool_size = 10
+# SQLite 配置（当 type = "sqlite" 时使用）
+sqlite_path = "data/remote_users.db"
+
+[redis]
+# Redis 配置
+enabled = false
+host = "localhost"
+port = 6379
+password = ""
+db = 0
+
+[auth]
+# 认证配置
+jwt_algorithm = "RS256"
+access_token_expire_minutes = 15
+refresh_token_expire_days = 7
+max_login_attempts = 5
+lockout_duration_minutes = 30
+# 密钥路径（首次运行会自动生成）
+private_key_path = "keys/private.pem"
+public_key_path = "keys/public.pem"
+
+[websocket]
+# WebSocket 配置
+heartbeat_interval_seconds = 30
+connection_timeout_seconds = 300
+max_connections_per_user = 3
+
+[files]
+# 文件上传配置
+upload_dir = "uploads"
+max_file_size_mb = 50
+allowed_types = [
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "audio/wav",
+    "audio/mp3",
+    "audio/mpeg",
+    "audio/webm",
+    "application/pdf",
+    "text/plain"
+]
+thumbnail_size = [200, 200]
+
+[bridge]
+# WinClaw 桥接配置
+winclaw_agent_timeout_seconds = 120
+stream_chunk_timeout_seconds = 60
+
+[rate_limit]
+# 速率限制配置
+enabled = true
+requests_per_minute = 60
+burst = 10
+
+[logging]
+# 日志配置
+level = "INFO"
+format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+file = "logs/remote_server.log"
