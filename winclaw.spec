@@ -1,13 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-WinClaw PyInstaller 打包配置
+Weclaw PyInstaller 打包配置
 
 使用方法:
-    pyinstaller winclaw.spec
+    pyinstaller weclaw.spec
 
 输出:
-    dist/WinClaw/
-        winclaw.exe      - GUI 版本（默认，无控制台窗口）
+    dist/Weclaw/
+        weclaw.exe      - GUI 版本（默认，无控制台窗口）
         winclaw-cli.exe  - CLI 版本（带控制台窗口）
 
 运行方式:

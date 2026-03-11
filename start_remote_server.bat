@@ -1,12 +1,12 @@
 @echo off
 chcp 65001 >nul
 REM ========================================
-REM WinClaw Remote Server 启动脚本
+REM Weclaw Remote Server 启动脚本
 REM ========================================
 
 echo.
 echo ========================================
-echo     WinClaw 远程服务启动器
+echo     Weclaw 远程服务启动器
 echo ========================================
 echo.
 

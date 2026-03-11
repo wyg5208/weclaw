@@ -1,14 +1,14 @@
-; WinClaw NSIS 安装程序脚本
+; Weclaw NSIS 安装程序脚本
 ; 使用 NSIS 3.x 编译
 ; 命令: makensis installer.nsi
 
 ;--------------------------------
 ; 基本定义
 
-!define PRODUCT_NAME "WinClaw"
+!define PRODUCT_NAME "Weclaw"
 !define PRODUCT_VERSION "0.1.0"
-!define PRODUCT_PUBLISHER "WinClaw"
-!define PRODUCT_WEB_SITE "https://github.com/your-org/winclaw"
+!define PRODUCT_PUBLISHER "Weclaw"
+!define PRODUCT_WEB_SITE "https://github.com/wyg5208/winclaw"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\winclaw.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"

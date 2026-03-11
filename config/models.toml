@@ -1,4 +1,4 @@
-# WinClaw 模型配置
+# Weclaw 模型配置
 # 每个模型定义在 [models.<key>] 节下
 # 必填字段: id, name, provider, api_type
 # 可选字段: base_url, api_key_env, input_types, supports_function_calling,

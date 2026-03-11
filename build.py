@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WinClaw 构建脚本。
+"""Weclaw 构建脚本。
 
 功能:
 1. 清理旧构建

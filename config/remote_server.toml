@@ -1,5 +1,5 @@
-# WinClaw 远程服务配置
-# WinClaw Remote Server Configuration
+# Weclaw 远程服务配置
+# Weclaw Remote Server Configuration
 
 [server]
 # 服务器配置
@@ -13,9 +13,9 @@ debug = false
 type = "mysql"
 host = "localhost"
 port = 3306
-user = "winclaw_user"
-password = "winclaw_user_20260221"
-database = "winclaw"
+user = "weclaw_user"
+password = "weclaw_user_20260221"
+database = "weclaw"
 pool_size = 10
 # SQLite 配置（当 type = "sqlite" 时使用）
 sqlite_path = "data/remote_users.db"
@@ -64,8 +64,8 @@ allowed_types = [
 thumbnail_size = [200, 200]
 
 [bridge]
-# WinClaw 桥接配置
-winclaw_agent_timeout_seconds = 120
+# Weclaw 桥接配置
+weclaw_agent_timeout_seconds = 120
 stream_chunk_timeout_seconds = 60
 
 [rate_limit]

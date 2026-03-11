@@ -1,4 +1,4 @@
-"""WinClaw GUI 应用程序。
+"""Weclaw GUI 应用程序。
 
 整合 Qt UI、异步桥接、Agent 核心，提供完整的桌面应用体验。
 支持：

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "description": "WinClaw 工具配置 — 定义所有可用工具的元信息与行为参数",
+  "description": "Weclaw 工具配置 — 定义所有可用工具的元信息与行为参数",
   "onboarding_checklist": [
     "1. 创建 src/tools/{name}.py 继承 BaseTool",
     "2. 在本文件 tools 段添加工具配置（含 dependencies）",
@@ -185,7 +185,7 @@
         "category": "system"
       },
       "config": {
-        "app_id": "WinClaw"
+        "app_id": "Weclaw"
       },
       "security": {
         "risk_level": "low",
@@ -358,7 +358,7 @@
       "display": {
         "name": "使用统计",
         "emoji": "📊",
-        "description": "获取 WinClaw 使用统计信息（对话数、消息数等）",
+        "description": "获取 Weclaw 使用统计信息（对话数、消息数等）",
         "category": "utility"
       },
       "config": {

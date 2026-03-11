@@ -1,0 +1,168 @@
+# ==========================================
+# Weclaw 跨平台配置示例
+# ==========================================
+# 本文件展示如何在不同平台上配置 Weclaw
+# 复制此文件为 config/platform_specific.toml 并根据实际平台修改
+# ==========================================
+
+# ------------------------------------------
+# 通用配置（所有平台）
+# ------------------------------------------
+[general]
+# Python 版本要求
+python_version = "3.11+"
+# 日志级别
+log_level = "INFO"
+# 数据目录（使用绝对路径或 ~ 展开）
+data_dir = "~/.weclaw"
+# 语言设置（空=自动检测）
+language = ""
+
+# ------------------------------------------
+# Windows 特定配置
+# ------------------------------------------
+[platform.windows]
+enabled = true
+# 系统通知应用 ID
+notify_app_id = "Weclaw"
+# 全局快捷键修饰键（Win/Ctrl/Alt）
+global_hotkey_modifier = "Win"
+# 全局快捷键触发键
+global_hotkey_key = "Shift+Space"
+# Shell 默认解释器
+shell_interpreter = "powershell.exe"
+# 定时任务后端
+scheduler_backend = "windows_task_scheduler"
+# 应用控制后端
+app_control_backend = "pywinauto"
+# 截图工具
+screenshot_tool = "pyautogui"
+# TTS 引擎
+tts_engine = "pyttsx3"  # Windows SAPI5
+
+# ------------------------------------------
+# macOS 特定配置
+# ------------------------------------------
+[platform.macos]
+enabled = false
+# 系统通知（使用 AppleScript）
+notify_app_id = "Weclaw"
+notify_script = "osascript -e 'display notification \"{}\" with title \"Weclaw\"'"
+# 全局快捷键修饰键（Cmd/Ctrl/Option）
+global_hotkey_modifier = "Cmd"
+global_hotkey_key = "Shift+Space"
+# Shell 默认解释器
+shell_interpreter = "/bin/zsh"
+# 定时任务后端
+scheduler_backend = "launchd"  # macOS launchd
+scheduler_plist_path = "~/Library/LaunchAgents/com.weclaw.scheduler.plist"
+# 应用控制后端
+app_control_backend = "applescript"  # 使用 AppleScript 控制应用
+applescript_template = """
+tell application "{app_name}"
+    activate
+end tell
+"""
+# 截图工具
+screenshot_tool = "screencapture"  # macOS 内置
+screenshot_args = "-x"  # 不播放声音
+# TTS 引擎
+tts_engine = "avfoundation"  # macOS AVFoundation
+voice_name = "Samantha"  # 或其他可用声音
+
+# ------------------------------------------
+# Linux 特定配置
+# ------------------------------------------
+[platform.linux]
+enabled = false
+# 系统通知（使用 notify-send）
+notify_app_id = "Weclaw"
+notify_command = "notify-send -a Weclaw '{}'"
+# 全局快捷键修饰键（Super/Ctrl/Alt）
+global_hotkey_modifier = "Super"  # Super 键（Windows 键）
+global_hotkey_key = "Shift+Space"
+# Shell 默认解释器
+shell_interpreter = "/bin/bash"
+# 定时任务后端
+scheduler_backend = "cron"  # 或 systemd
+cron_user = ""  # 留空=当前用户
+# 应用控制后端
+app_control_backend = "xdotool"  # X11 窗口控制
+# 安装依赖：sudo apt install xdotool wmctrl
+# 截图工具
+screenshot_tool = "scrot"  # 或 flameshot
+screenshot_args = "-q 90"  # JPEG 质量 90%
+# TTS 引擎
+tts_engine = "espeak"  # eSpeak NG（Linux 常用）
+# 或使用 festival: tts_engine = "festival"
+# 或使用 rhvoice: tts_engine = "rhvoice"
+
+# ------------------------------------------
+# 跨平台工具后端选择
+# ------------------------------------------
+[backends]
+# 浏览器自动化（全平台统一）
+browser = "playwright"
+browser_channels = ["chromium", "firefox", "webkit"]
+
+# 剪贴板（全平台统一）
+clipboard = "pyperclip"
+
+# OCR（全平台统一）
+ocr = "easyocr"  # 或 paddleocr
+
+# 语音识别
+stt = "whisper"  # OpenAI Whisper（全平台）
+
+# 文件操作（全平台统一，pathlib 自动处理路径差异）
+file_manager = "pathlib"
+
+# ------------------------------------------
+# 平台检测与自动切换
+# ------------------------------------------
+[auto_detect]
+# 启用平台自动检测
+enabled = true
+# 检测失败时的默认平台
+fallback_platform = "windows"
+# 是否允许运行时切换后端
+allow_runtime_switch = false
+
+# ------------------------------------------
+# 环境变量映射
+# ------------------------------------------
+[env_mapping]
+# 这些环境变量会在启动时自动设置
+HOME = "~"
+TEMP = "/tmp"  # Linux/macOS
+TMP = "/tmp"
+# Windows 特定
+USERPROFILE = "~"  # Windows
+LOCALAPPDATA = "~/AppData/Local"  # Windows
+APPDATA = "~/AppData/Roaming"  # Windows
+
+# ------------------------------------------
+# 路径规范化规则
+# ------------------------------------------
+[path_normalization]
+# 是否自动转换路径分隔符
+normalize_separators = true
+# 是否自动展开 ~
+expand_user = true
+# 是否自动转换为绝对路径
+resolve_to_absolute = false
+# 路径编码（文件系统编码）
+filesystem_encoding = "utf-8"
+
+# ------------------------------------------
+# 性能优化建议
+# ------------------------------------------
+[performance]
+# Windows: 使用原生 API 加速
+use_native_api = true
+# macOS: 禁用 App Nap
+disable_app_nap = true
+# Linux: 使用 X11 而非 Wayland（兼容性更好）
+prefer_x11 = true
+# 所有平台：异步 I/O
+use_async_io = true

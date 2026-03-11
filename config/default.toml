@@ -1,10 +1,10 @@
-# WinClaw 默认配置
+# Weclaw 默认配置
 
 [app]
-name = "WinClaw"
+name = "Weclaw"
 version = "2.7.1"
 log_level = "INFO"
-data_dir = "~/.winclaw"
+data_dir = "~/.weclaw"
 language = ""
 theme = "cyber_universe_blue"
 
@@ -65,7 +65,7 @@ enable_model_intent_classification = false
 [agent.trace]
 # 全链路追踪开关
 enabled = true
-# 追踪日志目录（空=默认 ~/.winclaw/traces）
+# 追踪日志目录（空=默认 ~/.weclaw/traces）
 trace_dir = ""
 # 工具输出预览最大字符数
 max_output_preview = 200
@@ -73,7 +73,7 @@ max_output_preview = 200
 max_trace_days = 30
 
 # 系统提示�?
-system_prompt = """你是 WinClaw，一个运行在 Windows 上的 AI 桌面智能体�?
+system_prompt = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面智能体�?
 
 你可以通过工具来帮助用户完成各种任务，包括执行命令、读写文件、截屏等�?
 当你需要完成某个任务时，请思考需要使用哪些工具，然后逐步执行�?

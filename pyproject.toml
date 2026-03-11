@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "winclaw"
+name = "weclaw"
 version = "2.7.3"
-description = "WinClaw - 轻量级 Windows AI 桌面智能体"
+description = "Weclaw - 轻量级跨平台 AI 桌面智能体（Windows/macOS/Linux）"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

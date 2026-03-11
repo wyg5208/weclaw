@@ -1,4 +1,4 @@
-"""WinClaw CLI 入口 — MVP 阶段的命令行交互界面。"""
+"""Weclaw CLI 入口 — MVP 阶段的命令行交互界面。"""
 
 from __future__ import annotations
 
