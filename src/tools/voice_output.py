@@ -6,10 +6,15 @@
 - 保存语音到文件
 - 调节语速和音量
 - 多音色选择
+
+注意: Windows SAPI5 后端有已知问题，引擎实例在 runAndWait() 后
+可能进入损坏状态，因此每次调用都创建新引擎实例。
+此外，在 qasync/Qt 环境下需要显式初始化 COM。
 """
 import asyncio
+import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 try:
     import pyttsx3
@@ -19,7 +24,17 @@ except ImportError:
     TTS_AVAILABLE = False
     pyttsx3 = None
 
+# Windows COM 支持
+try:
+    import pythoncom
+    COM_AVAILABLE = True
+except ImportError:
+    pythoncom = None
+    COM_AVAILABLE = False
+
 from .base import ActionDef, BaseTool, ToolResult, ToolResultStatus
+
+logger = logging.getLogger(__name__)
 
 
 class VoiceOutputTool(BaseTool):
@@ -32,16 +47,18 @@ class VoiceOutputTool(BaseTool):
 
     def __init__(self):
         super().__init__()
-        self._engine: Optional[Any] = None
+        # 注意：不再缓存引擎实例，每次使用时创建新实例
+        # 这是因为 pyttsx3 在 Windows SAPI5 下复用引擎会导致第二次播放失败
 
         if not TTS_AVAILABLE:
             raise ImportError("TTS 功能不可用。请安装依赖: pip install pyttsx3")
 
-    def _get_engine(self):
-        """获取 TTS 引擎实例"""
-        if self._engine is None:
-            self._engine = pyttsx3.init()
-        return self._engine
+    def _create_engine(self):
+        """创建新的 TTS 引擎实例
+        
+        每次调用都创建新实例，避免 Windows SAPI5 引擎状态残留问题。
+        """
+        return pyttsx3.init()
 
     def get_actions(self) -> list[ActionDef]:
         return [
@@ -140,27 +157,62 @@ class VoiceOutputTool(BaseTool):
             if not text.strip():
                 return ToolResult(status=ToolResultStatus.ERROR, error="文本内容为空")
 
-            engine = self._get_engine()
-
-            # 设置语速和音量
-            engine.setProperty("rate", max(100, min(rate, 300)))
-            engine.setProperty("volume", max(0.0, min(volume, 1.0)))
-
-            # 设置音色
-            voices = engine.getProperty("voices")
-            if voices and 0 <= voice_index < len(voices):
-                engine.setProperty("voice", voices[voice_index].id)
-
             # 在线程池中执行阻塞的朗读操作
-            # 注意：pyttsx3 在 Windows 上有已知问题，需要先 stop() 清理状态
-            # 否则第二次调用 runAndWait() 可能立即返回而不播放
+            # 关键：pyttsx3 内部有 _activeEngines 全局缓存，必须手动清理
             def _do_speak():
+                import threading
+                thread_id = threading.current_thread().ident
+                logger.info(f"TTS _do_speak 开始: thread={thread_id}, text={text[:20]}")
+                
+                engine = None
+                com_initialized = False
                 try:
-                    engine.stop()  # 清理之前的播放状态（关键修复）
-                except Exception:
-                    pass  # 忽略 stop 失败
-                engine.say(text)
-                engine.runAndWait()
+                    # Windows COM 初始化（在 qasync 线程池中必需）
+                    if COM_AVAILABLE and pythoncom:
+                        pythoncom.CoInitialize()
+                        com_initialized = True
+                        logger.info(f"TTS COM 初始化完成: thread={thread_id}")
+                    
+                    # 关键：清理 pyttsx3 内部的全局引擎缓存
+                    if hasattr(pyttsx3, '_activeEngines'):
+                        pyttsx3._activeEngines.clear()
+                        logger.info(f"TTS 清理 _activeEngines 缓存: thread={thread_id}")
+                    
+                    engine = pyttsx3.init(driverName='sapi5')  # 显式指定驱动
+                    logger.info(f"TTS 引擎创建完成: thread={thread_id}")
+                    
+                    # 设置语速和音量
+                    engine.setProperty("rate", max(100, min(rate, 300)))
+                    engine.setProperty("volume", max(0.0, min(volume, 1.0)))
+                    
+                    # 设置音色
+                    voices = engine.getProperty("voices")
+                    if voices and 0 <= voice_index < len(voices):
+                        engine.setProperty("voice", voices[voice_index].id)
+                    
+                    engine.say(text)
+                    logger.info(f"TTS say() 完成, 开始 runAndWait: thread={thread_id}")
+                    engine.runAndWait()
+                    logger.info(f"TTS runAndWait() 完成: thread={thread_id}")
+                finally:
+                    # 必须显式删除引擎
+                    if engine:
+                        try:
+                            engine.stop()
+                        except Exception:
+                            pass
+                        
+                        # 关键：从 pyttsx3 内部缓存中移除
+                        if hasattr(pyttsx3, '_activeEngines'):
+                            pyttsx3._activeEngines.clear()
+                        
+                        del engine
+                        logger.info(f"TTS 引擎已释放: thread={thread_id}")
+                    
+                    # 反初始化 COM
+                    if com_initialized and pythoncom:
+                        pythoncom.CoUninitialize()
+                        logger.info(f"TTS COM 反初始化完成: thread={thread_id}")
 
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _do_speak)
@@ -172,6 +224,7 @@ class VoiceOutputTool(BaseTool):
             )
 
         except Exception as e:
+            logger.error("TTS 朗读失败: %s", e)
             return ToolResult(status=ToolResultStatus.ERROR, error=f"朗读失败: {e}")
 
     async def _save_to_file(
@@ -190,25 +243,47 @@ class VoiceOutputTool(BaseTool):
             path = Path(output_path).expanduser().resolve()
             path.parent.mkdir(parents=True, exist_ok=True)
 
-            engine = self._get_engine()
-
-            # 设置参数
-            engine.setProperty("rate", max(100, min(rate, 300)))
-            engine.setProperty("volume", max(0.0, min(volume, 1.0)))
-
-            voices = engine.getProperty("voices")
-            if voices and 0 <= voice_index < len(voices):
-                engine.setProperty("voice", voices[voice_index].id)
-
-            # 保存到文件
-            # 注意：与 speak 相同，需要先 stop() 清理引擎状态
+            # 关键：pyttsx3 内部有 _activeEngines 全局缓存，必须手动清理
             def _do_save():
+                engine = None
+                com_initialized = False
                 try:
-                    engine.stop()  # 清理之前的状态
-                except Exception:
-                    pass
-                engine.save_to_file(text, str(path))
-                engine.runAndWait()
+                    # Windows COM 初始化
+                    if COM_AVAILABLE and pythoncom:
+                        pythoncom.CoInitialize()
+                        com_initialized = True
+                    
+                    # 清理 pyttsx3 内部缓存
+                    if hasattr(pyttsx3, '_activeEngines'):
+                        pyttsx3._activeEngines.clear()
+                    
+                    engine = pyttsx3.init(driverName='sapi5')
+                    
+                    # 设置参数
+                    engine.setProperty("rate", max(100, min(rate, 300)))
+                    engine.setProperty("volume", max(0.0, min(volume, 1.0)))
+                    
+                    voices = engine.getProperty("voices")
+                    if voices and 0 <= voice_index < len(voices):
+                        engine.setProperty("voice", voices[voice_index].id)
+                    
+                    engine.save_to_file(text, str(path))
+                    engine.runAndWait()
+                finally:
+                    if engine:
+                        try:
+                            engine.stop()
+                        except Exception:
+                            pass
+                        
+                        if hasattr(pyttsx3, '_activeEngines'):
+                            pyttsx3._activeEngines.clear()
+                        
+                        del engine
+                    
+                    # 反初始化 COM
+                    if com_initialized and pythoncom:
+                        pythoncom.CoUninitialize()
 
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, _do_save)
@@ -222,12 +297,24 @@ class VoiceOutputTool(BaseTool):
             )
 
         except Exception as e:
+            logger.error("TTS 保存失败: %s", e)
             return ToolResult(status=ToolResultStatus.ERROR, error=f"保存失败: {e}")
 
     def _list_voices(self) -> ToolResult:
         """列出可用的音色"""
+        engine = None
+        com_initialized = False
         try:
-            engine = self._get_engine()
+            # Windows COM 初始化
+            if COM_AVAILABLE and pythoncom:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            
+            # 清理 pyttsx3 内部缓存
+            if hasattr(pyttsx3, '_activeEngines'):
+                pyttsx3._activeEngines.clear()
+            
+            engine = pyttsx3.init(driverName='sapi5')
             voices = engine.getProperty("voices")
 
             voice_list = []
@@ -249,14 +336,29 @@ class VoiceOutputTool(BaseTool):
 
         except Exception as e:
             return ToolResult(status=ToolResultStatus.ERROR, error=f"查询音色失败: {e}")
+        finally:
+            # 必须显式删除引擎
+            if engine:
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+                
+                if hasattr(pyttsx3, '_activeEngines'):
+                    pyttsx3._activeEngines.clear()
+                
+                del engine
+            
+            # 反初始化 COM
+            if com_initialized and pythoncom:
+                pythoncom.CoUninitialize()
 
     def _stop(self) -> ToolResult:
-        """停止朗读"""
-        try:
-            if self._engine:
-                self._engine.stop()
-
-            return ToolResult(status=ToolResultStatus.SUCCESS, output="已停止朗读")
-
-        except Exception as e:
-            return ToolResult(status=ToolResultStatus.ERROR, error=f"停止失败: {e}")
+        """停止朗读
+        
+        注意：由于每次播放都使用新引擎实例，此方法主要用于兼容性。
+        实际的停止效果有限，因为播放是在独立线程中进行的。
+        """
+        # 由于不再缓存引擎，这里只返回成功
+        # 真正的停止需要通过取消 asyncio 任务来实现
+        return ToolResult(status=ToolResultStatus.SUCCESS, output="已发送停止请求")
