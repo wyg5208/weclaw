@@ -4,7 +4,8 @@
 - 顶部：标题栏（窗口控制 + 模型选择）
 - 中部：聊天区域（消息气泡列表）
 - 底部：输入区域（多行输入框 + 发送按钮 + 附件面板）
-- 右侧：状态面板（工具执行状态、Token 用量）
+- 底部状态栏：模型、Token用量（输入/输出）、活跃任务、PWA连接、定时任务状态
+- 右侧：状态面板（工具执行状态）
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QSizePolicy,
     QStatusBar,
     QTextEdit,
     QToolBar,
@@ -72,6 +74,11 @@ class ChatInputEdit(QTextEdit):
     """自定义输入框：Enter 发送，Shift+Enter 换行。"""
 
     send_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # 设置高度策略为 Fixed，以便 setFixedHeight 正常工作
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def keyPressEvent(self, event) -> None:
         """拦截回车键。"""
@@ -601,13 +608,17 @@ class MainWindow(QMainWindow):
         logging.getLogger(__name__).warning("未找到窗口图标文件")
 
     def _center_on_screen(self) -> None:
-        """将窗口居中显示在屏幕上。"""
+        """将窗口居中显示在屏幕上（稍微偏上，确保底部能完整显示）。"""
         screen = self.screen()
         if screen:
             screen_geometry = screen.geometry()
             window_geometry = self.geometry()
             x = (screen_geometry.width() - window_geometry.width()) // 2
-            y = (screen_geometry.height() - window_geometry.height()) // 2
+            # 稍微偏上显示，offset=50 可以根据需要调整，确保底部不被截断
+            offset = 50
+            y = (screen_geometry.height() - window_geometry.height()) // 2 - offset
+            # 确保 y 不为负（窗体顶部不超过屏幕顶部）
+            y = max(y, 10)
             self.move(x, y)
 
     def reload_ui(self) -> None:
@@ -943,8 +954,8 @@ class MainWindow(QMainWindow):
         right_widget = self._create_status_panel()
         splitter.addWidget(right_widget)
 
-        # 设置分割比例：左侧800，右侧200（右侧宽度减少一半）
-        splitter.setSizes([800, 200])
+        # 设置分割比例：左侧600，右侧400（右侧宽度翻倍）
+        splitter.setSizes([600, 400])
 
     def _create_chat_area(self) -> QWidget:
         """创建聊天区域。"""
@@ -977,62 +988,144 @@ class MainWindow(QMainWindow):
         self._attachment_panel.file_removed.connect(self._on_attachment_removed)
         self._attachment_panel.clear_requested.connect(self._on_attachments_clear)
         self._attachment_panel.files_dropped.connect(self._on_files_dropped)
+        self._attachment_panel.quick_commands_requested.connect(self._on_show_quick_commands)
+        self._attachment_panel.combo_commands_requested.connect(self._on_show_combo_commands)
         layout.addWidget(self._attachment_panel)
+
+        # 输入框区域（展开按钮 + 输入框 + 操作按钮 + 发送按钮）
+        input_container = QWidget()
+        input_container_layout = QHBoxLayout(input_container)
+        input_container_layout.setContentsMargins(0, 0, 0, 0)
+        input_container_layout.setSpacing(4)
+
+        # 展开/收起按钮 - 输入框左侧，带边框的按钮样式
+        self._expand_input_btn = QPushButton("展开")
+        self._expand_input_btn.setToolTip("展开输入框")
+        self._expand_input_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #333;
+                border-radius: 4px;
+                background: transparent;
+                color: #333;
+                font-size: 12px;
+                padding: 4px 8px;
+            }
+            QPushButton:hover {
+                background: #333;
+                color: white;
+            }
+        """)
+        self._expand_input_btn.clicked.connect(self._toggle_input_expand)
+        input_container_layout.addWidget(self._expand_input_btn)
 
         # 输入框（自定义键监听）
         self._input_edit = ChatInputEdit()
         self._input_edit.send_requested.connect(self._on_send)
         self._input_edit.setPlaceholderText("输入消息... (Enter发送，Shift+Enter换行)，/help 查看快捷工具指令清单，点击快捷命令、组合命令 获取100+示例")
+        self._input_edit.setMinimumHeight(30)
         self._input_edit.setMaximumHeight(120)
-        self._input_edit.setMinimumHeight(60)
-        layout.addWidget(self._input_edit)
+        self._input_edit.setStyleSheet("""
+            QTextEdit {
+                padding: 0px 8px;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                background: white;
+                color: #333;
+            }
+            QTextEdit:focus {
+                border: 1px solid #28a745;
+            }
+        """)
+        input_container_layout.addWidget(self._input_edit, stretch=1)
 
-        # 按钮行
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
+        # 输入框操作按钮组 - 带边框的按钮样式
+        btn_style = """
+            QPushButton {
+                border: 1px solid #333;
+                border-radius: 4px;
+                background: transparent;
+                color: #333;
+                font-size: 12px;
+                padding: 4px 8px;
+            }
+            QPushButton:hover {
+                background: #333;
+                color: white;
+            }
+        """
 
-        # 附件按钮
-        self._attach_btn = QPushButton("📎 添加文件")
-        self._attach_btn.setToolTip("添加图片或文件附件")
-        self._attach_btn.clicked.connect(self._on_attachment)
-        button_layout.addWidget(self._attach_btn)
+        # 复制按钮
+        self._copy_input_btn = QPushButton("复制")
+        self._copy_input_btn.setToolTip("复制输入框内容")
+        self._copy_input_btn.setStyleSheet(btn_style)
+        self._copy_input_btn.clicked.connect(self._on_copy_input)
+        input_container_layout.addWidget(self._copy_input_btn)
 
-        # 常用命令按钮
-        self._quick_commands_btn = QPushButton("⚡ 快捷命令")
-        self._quick_commands_btn.setToolTip("常用快捷命令")
-        self._quick_commands_btn.clicked.connect(self._on_show_quick_commands)
-        button_layout.addWidget(self._quick_commands_btn)
+        # 粘贴按钮
+        self._paste_input_btn = QPushButton("粘贴")
+        self._paste_input_btn.setToolTip("粘贴到输入框")
+        self._paste_input_btn.setStyleSheet(btn_style)
+        self._paste_input_btn.clicked.connect(self._on_paste_input)
+        input_container_layout.addWidget(self._paste_input_btn)
 
-        self._combo_commands_btn = QPushButton("🔗 组合命令")
-        self._combo_commands_btn.setToolTip("常用组合命令")
-        self._combo_commands_btn.clicked.connect(self._on_show_combo_commands)
-        button_layout.addWidget(self._combo_commands_btn)
+        # 清空按钮
+        self._clear_input_btn = QPushButton("清空")
+        self._clear_input_btn.setToolTip("清空输入框")
+        self._clear_input_btn.setStyleSheet(btn_style)
+        self._clear_input_btn.clicked.connect(self._on_clear_input)
+        input_container_layout.addWidget(self._clear_input_btn)
 
-        button_layout.addStretch()
-
-        # 发送按钮
+        # 发送按钮 - 确保文字完整显示
         self._send_btn = QPushButton("发送")
         self._send_btn.setDefault(True)
-        self._send_btn.setMinimumWidth(80)
+        self._send_btn.setMinimumSize(65, 30)
+        self._send_btn.setStyleSheet("""
+            QPushButton {
+                border: none !important;
+                border-radius: 6px !important;
+                background: #28a745 !important;
+                color: white !important;
+                font-weight: bold !important;
+                font-size: 14px !important;
+                padding: 0px 12px !important;
+            }
+            QPushButton:hover {
+                background: #218838 !important;
+            }
+        """)
         self._send_btn.clicked.connect(self._on_send)
-        button_layout.addWidget(self._send_btn)
+        input_container_layout.addWidget(self._send_btn)
 
         # 停止按钮（默认隐藏）
         self._stop_btn = QPushButton("停止")
-        self._stop_btn.setMinimumWidth(80)
+        self._stop_btn.setMinimumSize(65, 30)
         self._stop_btn.setVisible(False)
+        self._stop_btn.setStyleSheet("""
+            QPushButton {
+                border: none !important;
+                border-radius: 6px !important;
+                background: #dc3545 !important;
+                color: white !important;
+                font-weight: bold !important;
+                font-size: 14px !important;
+                padding: 0px 12px !important;
+            }
+            QPushButton:hover {
+                background: #c82333 !important;
+            }
+        """)
         self._stop_btn.clicked.connect(self._on_stop)
-        button_layout.addWidget(self._stop_btn)
+        input_container_layout.addWidget(self._stop_btn)
 
-        layout.addLayout(button_layout)
+        layout.addWidget(input_container)
 
         return widget
 
     def _create_status_panel(self) -> QWidget:
         """创建右侧状态面板（P2-11 增强版）。"""
         widget = QWidget()
-        widget.setMinimumWidth(150)
-        widget.setMaximumWidth(250)
+        widget.setMinimumWidth(300)  # 初始宽度翻倍
+        widget.setMaximumWidth(500)  # 最大宽度翻倍
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
@@ -1044,15 +1137,6 @@ class MainWindow(QMainWindow):
         self._session_info.setWordWrap(True)
         session_layout.addWidget(self._session_info)
         layout.addWidget(session_group)
-
-        # Token 用量
-        usage_group = QGroupBox("Token 用量")
-        usage_layout = QVBoxLayout(usage_group)
-        self._token_label = QLabel("输入: 0 | 输出: 0")
-        usage_layout.addWidget(self._token_label)
-        self._cost_label = QLabel("费用: $0.0000")
-        usage_layout.addWidget(self._cost_label)
-        layout.addWidget(usage_group)
 
         # 工具执行状态（P2-11 新增实时日志）
         tools_group = QGroupBox("工具执行状态")
@@ -1095,24 +1179,6 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(tools_group)
 
-        # PWA 连接状态面板
-        pwa_group = QGroupBox("远程连接 (PWA)")
-        pwa_layout = QVBoxLayout(pwa_group)
-        
-        # 连接数量
-        self._pwa_count_label = QLabel("在线: 0 用户")
-        self._pwa_count_label.setStyleSheet("font-size: 12px; font-weight: bold;")
-        pwa_layout.addWidget(self._pwa_count_label)
-        
-        # 用户列表
-        self._pwa_user_list = QLabel("暂无连接")
-        self._pwa_user_list.setWordWrap(True)
-        self._pwa_user_list.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._pwa_user_list.setStyleSheet("font-size: 11px; color: #666;")
-        pwa_layout.addWidget(self._pwa_user_list)
-        
-        layout.addWidget(pwa_group)
-
         return widget
 
     def _setup_status_bar(self) -> None:
@@ -1133,6 +1199,11 @@ class MainWindow(QMainWindow):
         self._status_cron_overview = QLabel("")
         self._status_cron_overview.setStyleSheet("margin-left: 16px; color: #666;")
         self._status_bar.addWidget(self._status_cron_overview)
+
+        # PWA 连接状态（活跃任务右侧）
+        self._status_pwa = QLabel("")
+        self._status_pwa.setStyleSheet("margin-left: 16px; color: #888;")
+        self._status_bar.addWidget(self._status_pwa)
 
         # 定时任务执行状态（执行中/完成/失败）
         self._status_cron = QLabel("")
@@ -1319,58 +1390,67 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已复制工作流信息到剪贴板", 3000)
 
     def update_pwa_status(self, connections: list) -> None:
-        """更新 PWA 连接状态显示。
-        
-        Args:
-            connections: PWA 连接列表，每个连接包含 user_id, username, connected_at 等
-        """
-        if not hasattr(self, '_pwa_count_label') or self._pwa_count_label is None:
-            return
-        
+        """更新 PWA 连接状态显示（状态栏）。"""
         try:
             count = len(connections)
-            self._pwa_count_label.setText(f"在线: {count} 用户")
             
             if count == 0:
-                self._pwa_user_list.setText("暂无连接")
-                self._pwa_user_list.setStyleSheet("font-size: 11px; color: #999;")
+                status_text = "📱 PWA: 无连接"
             else:
-                # 构建用户列表显示
-                lines = []
-                for conn in connections[:5]:  # 最多显示5个用户
-                    username = conn.get("username", conn.get("user_id", "未知")[:8])
-                    request_count = conn.get("request_count", 0)
-                    
-                    # 格式化连接时间
-                    connected_at = conn.get("connected_at")
-                    if connected_at:
-                        if isinstance(connected_at, str):
-                            from datetime import datetime
-                            try:
-                                connected_at = datetime.fromisoformat(connected_at)
-                                time_str = connected_at.strftime("%H:%M")
-                            except:
-                                time_str = ""
-                        else:
-                            time_str = connected_at.strftime("%H:%M")
-                    else:
-                        time_str = ""
-                    
-                    line = f"• {username}"
-                    if time_str:
-                        line += f" ({time_str})"
-                    if request_count > 0:
-                        line += f" [{request_count}请求]"
-                    lines.append(line)
-                
-                if count > 5:
-                    lines.append(f"... 还有 {count - 5} 个用户")
-                
-                self._pwa_user_list.setText("\n".join(lines))
-                self._pwa_user_list.setStyleSheet("font-size: 11px; color: #333;")
+                # 简化的状态栏显示：显示连接数和用户
+                usernames = [conn.get("username", conn.get("user_id", "?")[:6]) for conn in connections[:3]]
+                if count <= 3:
+                    user_str = " ".join(f"@{u}" for u in usernames)
+                else:
+                    user_str = " ".join(f"@{u}" for u in usernames) + f" +{count - 3}"
+                status_text = f"📱 PWA: {count}用户 {user_str}"
+            
+            if hasattr(self, '_status_pwa') and self._status_pwa is not None:
+                self._status_pwa.setText(status_text)
         except RuntimeError:
             # 组件已被销毁，忽略
             pass
+
+    def _toggle_input_expand(self) -> None:
+        """切换输入框展开/收起状态。"""
+        current_height = self._input_edit.height()
+        if current_height < 100:
+            # 展开到最大高度
+            self._input_edit.setFixedHeight(120)
+            self._expand_input_btn.setText("收起")
+            self._expand_input_btn.setToolTip("收起输入框")
+        else:
+            # 收起到最小高度
+            self._input_edit.setFixedHeight(30)
+            self._expand_input_btn.setText("展开")
+            self._expand_input_btn.setToolTip("展开输入框")
+
+    def _on_copy_input(self) -> None:
+        """复制输入框内容到剪贴板。"""
+        text = self._input_edit.toPlainText()
+        if text:
+            from PySide6.QtWidgets import QApplication
+            clipboard = QApplication.clipboard()
+            clipboard.setText(text)
+            self.statusBar().showMessage("已复制输入框内容", 2000)
+
+    def _on_paste_input(self) -> None:
+        """粘贴剪贴板内容到输入框。"""
+        from PySide6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        if text:
+            # 在当前光标位置插入文本
+            cursor = self._input_edit.textCursor()
+            cursor.insertText(text)
+            self.statusBar().showMessage("已粘贴内容", 2000)
+
+    def _on_clear_input(self) -> None:
+        """清空输入框。"""
+        text = self._input_edit.toPlainText()
+        if text:
+            self._input_edit.clear()
+            self.statusBar().showMessage("已清空输入框", 2000)
 
     def _on_send(self) -> None:
         """发送消息。"""
@@ -1696,20 +1776,12 @@ class MainWindow(QMainWindow):
             pass
     
     def update_usage(self, input_tokens: int, output_tokens: int, cost: float) -> None:
-        """更新用量显示（侧面板 + 状态栏）。"""
-        # 检查组件是否仍然有效
-        if not hasattr(self, '_token_label') or self._token_label is None:
-            return
-        if not hasattr(self, '_cost_label') or self._cost_label is None:
-            return
+        """更新用量显示（状态栏，拆分为输入和输出）。"""
         try:
-            self._token_label.setText(f"输入：{input_tokens} | 输出：{output_tokens}")
-            self._cost_label.setText(f"费用：${cost:.4f}")
-            # 状态栏简报
             total = input_tokens + output_tokens
             if total > 0:
                 if hasattr(self, '_status_tokens') and self._status_tokens is not None:
-                    self._status_tokens.setText(f"Token: {total} | ${cost:.4f}")
+                    self._status_tokens.setText(f"输入: {input_tokens} 输出: {output_tokens} | ${cost:.4f}")
         except RuntimeError:
             # 组件已被销毁，忽略
             pass

@@ -496,13 +496,15 @@ class ChatWidget(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignTop)  # 内容向上对齐
 
         # 消息容器
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
         self._layout.setContentsMargins(12, 8, 12, 8)
-        self._layout.setSpacing(4)  # 减小消息间距（68%的6px≈4px）
-        self._layout.addStretch()
+        self._layout.setSpacing(4)  # 消息间距
+        self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)  # 消息向上紧凑靠齐
+        # 不添加stretch，让消息从顶部开始排列
 
         scroll.setWidget(self._container)
         top_layout.addWidget(scroll)
@@ -513,7 +515,7 @@ class ChatWidget(QWidget):
     def copy_all_conversation(self) -> str:
         """获取所有对话内容。"""
         conversation_text = ""
-        for i in range(self._layout.count() - 1):  # 最后一个是stretch
+        for i in range(self._layout.count()):  # 遍历所有消息
             item = self._layout.itemAt(i)
             if item and item.widget():
                 widget = item.widget()
@@ -529,7 +531,7 @@ class ChatWidget(QWidget):
         from PySide6.QtWidgets import QApplication
         # 收集所有消息
         conversation_text = ""
-        for i in range(self._layout.count() - 1):  # 最后一个是stretch
+        for i in range(self._layout.count()):  # 遍历所有消息
             item = self._layout.itemAt(i)
             if item and item.widget():
                 widget = item.widget()
@@ -550,8 +552,8 @@ class ChatWidget(QWidget):
     def add_user_message(self, text: str) -> None:
         """添加用户消息。"""
         bubble = MessageBubble(text, is_user=True)
-        # 在 stretch 之前插入
-        self._layout.insertWidget(self._layout.count() - 1, bubble)
+        # 在末尾添加
+        self._layout.addWidget(bubble)
         self._scroll_to_bottom()
         self._current_ai_bubble = None
         self._current_reasoning_block = None
@@ -559,7 +561,7 @@ class ChatWidget(QWidget):
     def add_ai_message(self, text: str) -> None:
         """添加 AI 消息（完整消息）。"""
         bubble = MessageBubble(text, is_user=False)
-        self._layout.insertWidget(self._layout.count() - 1, bubble)
+        self._layout.addWidget(bubble)
         self._scroll_to_bottom()
         self._current_ai_bubble = None
         self._current_reasoning_block = None
@@ -571,9 +573,7 @@ class ChatWidget(QWidget):
         """
         if self._current_ai_bubble is None:
             self._current_ai_bubble = MessageBubble("", is_user=False)
-            self._layout.insertWidget(
-                self._layout.count() - 1, self._current_ai_bubble
-            )
+            self._layout.addWidget(self._current_ai_bubble)
 
         self._current_ai_bubble.append_text_incremental(text)  # 使用增量追加
         self._scroll_to_bottom()
@@ -582,9 +582,7 @@ class ChatWidget(QWidget):
         """开始显示思考过程。"""
         if self._current_reasoning_block is None:
             self._current_reasoning_block = ReasoningBlock()
-            self._layout.insertWidget(
-                self._layout.count() - 1, self._current_reasoning_block
-            )
+            self._layout.addWidget(self._current_reasoning_block)
         self._scroll_to_bottom()
 
     def append_reasoning(self, text: str) -> None:
@@ -813,10 +811,11 @@ class MessageBubble(QFrame):
         else:
             main_layout.setContentsMargins(6, 3, 6, 3)
 
-        # 内容行：文本浏览器 + 按钮（上下排列）
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(0)
+        # 使用容器widget来支持绝对定位
+        content_widget = QWidget()
+        content_layout = QHBoxLayout(content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         # 文本浏览器
         self._text_browser = QTextBrowser()
@@ -826,56 +825,63 @@ class MessageBubble(QFrame):
         self._text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._text_browser.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self._text_browser.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-
-        # 用户和 AI 都使用全部可用宽度
         self._text_browser.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
-
         content_layout.addWidget(self._text_browser)
 
-        # 按钮容器（垂直排列，固定在右上角）
-        btn_container = QVBoxLayout()
-        btn_container.setSpacing(2)
-        btn_container.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(content_widget)
+
+        # 按钮容器 - 使用绝对定位固定在右上角
+        self._btn_widget = QWidget(self)
+        self._btn_widget.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self._btn_widget.setStyleSheet("background: transparent;")
+        
+        btn_layout = QHBoxLayout(self._btn_widget)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(4)
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
 
         # 复制按钮
         self._copy_btn = QPushButton("📋")
-        self._copy_btn.setFixedSize(24, 24)
+        self._copy_btn.setFixedSize(22, 22)
         self._copy_btn.setToolTip("复制消息内容")
         self._copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._copy_btn.clicked.connect(self._on_copy)
-        self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        btn_container.addWidget(self._copy_btn)
+        btn_layout.addWidget(self._copy_btn)
 
         # 播放按钮
         self._play_btn = QPushButton("▶")
-        self._play_btn.setFixedSize(24, 24)
+        self._play_btn.setFixedSize(22, 22)
         self._play_btn.setToolTip("播放消息")
         self._play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._play_btn.clicked.connect(self._on_play_toggle)
-        self._play_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        btn_container.addWidget(self._play_btn)
+        btn_layout.addWidget(self._play_btn)
 
         # AI消息添加收起/展开按钮
         if not self._is_user:
             self._collapse_btn = QPushButton("▲")
-            self._collapse_btn.setFixedSize(24, 24)
+            self._collapse_btn.setFixedSize(22, 22)
             self._collapse_btn.setToolTip("收起消息")
             self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._collapse_btn.clicked.connect(self._on_toggle_collapse)
-            self._collapse_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            btn_container.addWidget(self._collapse_btn)
-
-        # 添加弹性空间，将按钮固定在顶部
-        btn_container.addStretch()
-
-        content_layout.addLayout(btn_container)
-
-        main_layout.addLayout(content_layout)
+            btn_layout.addWidget(self._collapse_btn)
 
         # 应用当前主题颜色
         self._apply_theme_styles()
+
+    def resizeEvent(self, event) -> None:
+        """窗口大小改变时重新定位按钮。"""
+        super().resizeEvent(event)
+        if hasattr(self, '_btn_widget'):
+            # 按钮固定在右上角
+            btn_height = 26
+            self._btn_widget.setGeometry(
+                self.width() - 80,  # 右侧留出按钮宽度
+                2,  # 顶部对齐
+                76,  # 按钮区域宽度
+                btn_height
+            )
 
     def _apply_theme_styles(self) -> None:
         """根据当前 _theme_colors 设置气泡和文本样式。"""

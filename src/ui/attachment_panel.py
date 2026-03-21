@@ -100,6 +100,8 @@ class AttachmentPanel(QFrame):
     file_removed = Signal(str)      # 文件被移除
     clear_requested = Signal()      # 请求清空
     files_dropped = Signal(list)    # 拖放文件 (paths)
+    quick_commands_requested = Signal()  # 快捷命令
+    combo_commands_requested = Signal()  # 组合命令
     
     def __init__(self, attachment_manager: "AttachmentManager", parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -193,6 +195,46 @@ class AttachmentPanel(QFrame):
         self._clear_btn.clicked.connect(self.clear_requested.emit)
         self._clear_btn.setVisible(False)  # 初始隐藏
         header_layout.addWidget(self._clear_btn)
+
+        # 快捷命令按钮
+        self._quick_cmd_btn = QPushButton("⚡ 快捷命令")
+        self._quick_cmd_btn.setFixedHeight(24)
+        self._quick_cmd_btn.setToolTip("常用快捷命令")
+        self._quick_cmd_btn.setStyleSheet("""
+            QPushButton {
+                padding: 2px 8px;
+                border: 1px solid #6c757d;
+                border-radius: 4px;
+                background: transparent;
+                color: #6c757d;
+            }
+            QPushButton:hover {
+                background: #6c757d;
+                color: white;
+            }
+        """)
+        self._quick_cmd_btn.clicked.connect(self.quick_commands_requested.emit)
+        header_layout.addWidget(self._quick_cmd_btn)
+
+        # 组合命令按钮
+        self._combo_cmd_btn = QPushButton("🔗 组合命令")
+        self._combo_cmd_btn.setFixedHeight(24)
+        self._combo_cmd_btn.setToolTip("常用组合命令")
+        self._combo_cmd_btn.setStyleSheet("""
+            QPushButton {
+                padding: 2px 8px;
+                border: 1px solid #6c757d;
+                border-radius: 4px;
+                background: transparent;
+                color: #6c757d;
+            }
+            QPushButton:hover {
+                background: #6c757d;
+                color: white;
+            }
+        """)
+        self._combo_cmd_btn.clicked.connect(self.combo_commands_requested.emit)
+        header_layout.addWidget(self._combo_cmd_btn)
         
         layout.addLayout(header_layout)
         
