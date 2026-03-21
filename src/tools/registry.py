@@ -196,8 +196,26 @@ class ToolRegistry:
             kwargs["db_path"] = tool_config.get("db_path", "")
         elif tool_name == "doc_generator":
             kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "pdf_tool":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "format_converter":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "ppt_generator":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
         elif tool_name == "image_generator":
             kwargs["api_key"] = tool_config.get("api_key", "")
+        elif tool_name == "ai_writer":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "id_photo":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "data_processor":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "data_visualization":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "literature_search":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "gif_maker":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
         elif tool_name == "cron":
             # 定时任务工具需要模型注册表和工具注册表来执行 AI 任务
             # 这些会在注册后通过 set_agent_dependencies 方法设置
@@ -205,6 +223,20 @@ class ToolRegistry:
         elif tool_name == "wechat":
             kwargs["config_path"] = tool_config.get("config_path", "")
             kwargs["knowledge_base_path"] = tool_config.get("knowledge_base_path", "")
+        elif tool_name == "contract_generator":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "financial_report":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "resume_builder":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "mind_map":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "speech_to_text":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "education_tool":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "coding_assistant":
+            kwargs["output_dir"] = tool_config.get("output_dir", "generated")
                 
         return kwargs
 

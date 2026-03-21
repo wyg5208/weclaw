@@ -586,6 +586,63 @@
       },
       "actions": ["generate_document"]
     },
+    "pdf_tool": {
+      "enabled": true,
+      "module": "src.tools.pdf_tool",
+      "class": "PDFTool",
+      "display": {
+        "name": "PDF处理",
+        "emoji": "📑",
+        "description": "PDF 文件处理：合并、拆分、提取页面、压缩、加密解密",
+        "category": "utility"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["merge_pdfs", "split_pdf", "extract_pages", "compress_pdf", "add_password", "remove_password"]
+    },
+    "format_converter": {
+      "enabled": true,
+      "module": "src.tools.format_converter",
+      "class": "FormatConverterTool",
+      "display": {
+        "name": "格式转换",
+        "emoji": "🔄",
+        "description": "文档、数据、图片格式转换，支持 Markdown、Word、HTML、PDF、LaTeX、CSV、JSON、XML 等多种格式",
+        "category": "utility"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["convert_markdown_to_docx", "convert_markdown_to_html", "convert_markdown_to_pdf", "convert_markdown_to_latex", "convert_latex_to_pdf", "convert_docx_to_markdown", "convert_docx_to_html", "convert_html_to_markdown", "convert_csv_to_json", "convert_json_to_csv", "convert_json_to_xml", "convert_image_format"]
+    },
+    "ppt_generator": {
+      "enabled": true,
+      "module": "src.tools.ppt_generator",
+      "class": "PPTTool",
+      "display": {
+        "name": "PPT生成",
+        "emoji": "📊",
+        "description": "AI 生成演示文稿 PPT，支持多种风格模板",
+        "category": "generation"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["generate_ppt", "add_slide", "export_pdf"]
+    },
     "image_generator": {
       "enabled": true,
       "module": "src.tools.image_generator",
@@ -608,6 +665,25 @@
         "standalone": true
       },
       "actions": ["generate_image"]
+    },
+    "ai_writer": {
+      "enabled": true,
+      "module": "src.tools.ai_writer",
+      "class": "AIWriterTool",
+      "display": {
+        "name": "AI写作",
+        "emoji": "✍️",
+        "description": "AI 辅助写作：生成论文框架、文章大纲、小说结构、续写提纲",
+        "category": "generation"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["write_paper", "write_article", "write_novel", "continue_writing"]
     },
     "python_runner": {
       "enabled": true,
@@ -648,6 +724,234 @@
         "require_confirmation": false
       },
       "actions": ["list_tools", "get_tool_info", "list_categories"]
+    },
+    "id_photo": {
+      "enabled": true,
+      "module": "src.tools.id_photo",
+      "class": "IDPhotoTool",
+      "display": {
+        "name": "证件照",
+        "emoji": "📷",
+        "description": "证件照制作：更换背景色、调整标准尺寸、压缩、添加水印",
+        "category": "visual"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["make_id_photo", "change_background", "resize_photo", "compress_photo", "add_watermark"]
+    },
+    "data_processor": {
+      "enabled": true,
+      "module": "src.tools.data_processor",
+      "class": "DataProcessorTool",
+      "display": {
+        "name": "数据处理",
+        "emoji": "📊",
+        "description": "Excel/CSV 数据处理：读取、筛选、排序、聚合、合并、透视表、清洗、导出",
+        "category": "utility"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["read_excel", "filter_data", "sort_data", "aggregate_data", "merge_data", "pivot_table", "clean_data", "export_data"]
+    },
+    "data_visualization": {
+      "enabled": true,
+      "module": "src.tools.data_visualization",
+      "class": "DataVisualizationTool",
+      "display": {
+        "name": "数据可视化",
+        "emoji": "📈",
+        "description": "数据可视化分析：柱状图、折线图、饼图、散点图、热力图、仪表盘",
+        "category": "utility"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["plot_bar", "plot_line", "plot_pie", "plot_scatter", "plot_heatmap", "generate_dashboard"]
+    },
+    "literature_search": {
+      "enabled": true,
+      "module": "src.tools.literature_search",
+      "class": "LiteratureSearchTool",
+      "display": {
+        "name": "文献检索",
+        "emoji": "📚",
+        "description": "学术文献检索：基于 OpenAlex 搜索论文、获取详情、下载PDF、查看引用",
+        "category": "web"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["search_papers", "get_paper_details", "download_pdf", "get_citations"]
+    },
+    "gif_maker": {
+      "enabled": true,
+      "module": "src.tools.gif_maker",
+      "class": "GifMakerTool",
+      "display": {
+        "name": "GIF制作",
+        "emoji": "🎞️",
+        "description": "GIF 动图制作：视频转GIF、图片序列转GIF、屏幕区域录制GIF",
+        "category": "multimedia"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["video_to_gif", "images_to_gif", "capture_region_to_gif"]
+    },
+    "contract_generator": {
+      "enabled": true,
+      "module": "src.tools.contract_generator",
+      "class": "ContractGeneratorTool",
+      "display": {
+        "name": "合同生成器",
+        "emoji": "📄",
+        "description": "智能合同生成：支持多种合同模板、自定义条款、多格式导出",
+        "category": "document"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["generate_contract", "list_templates", "customize_clause", "export_contract"]
+    },
+    "financial_report": {
+      "enabled": true,
+      "module": "src.tools.financial_report",
+      "class": "FinancialReportTool",
+      "display": {
+        "name": "财务报告",
+        "emoji": "💰",
+        "description": "财务报告生成：资产负债表、损益表、现金流量表、财务分析",
+        "category": "data"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["generate_balance_sheet", "generate_income_statement", "generate_cash_flow", "financial_analysis", "export_report"]
+    },
+    "resume_builder": {
+      "enabled": true,
+      "module": "src.tools.resume_builder",
+      "class": "ResumeBuilderTool",
+      "display": {
+        "name": "简历生成器",
+        "emoji": "📋",
+        "description": "专业简历生成：多种模板、智能排版、多格式导出",
+        "category": "document"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["generate_resume", "list_templates", "export_resume"]
+    },
+    "mind_map": {
+      "enabled": true,
+      "module": "src.tools.mind_map",
+      "class": "MindMapTool",
+      "display": {
+        "name": "思维导图",
+        "emoji": "🧠",
+        "description": "思维导图生成：文本转思维导图、多种样式、多格式导出",
+        "category": "document"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["generate_mindmap", "text_to_mindmap", "export_mindmap"]
+    },
+    "speech_to_text": {
+      "enabled": true,
+      "module": "src.tools.speech_to_text",
+      "class": "SpeechToTextTool",
+      "display": {
+        "name": "语音转文字",
+        "emoji": "🎙️",
+        "description": "语音识别：实时录音转文字、音频文件转写、批量转写",
+        "category": "media"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["transcribe_audio", "transcribe_file", "batch_transcribe"]
+    },
+    "education_tool": {
+      "enabled": true,
+      "module": "src.tools.education_tool",
+      "class": "EducationTool",
+      "display": {
+        "name": "教育学习",
+        "emoji": "📚",
+        "description": "教育辅助：生成测验题、创建闪卡、制定学习计划、概念解释",
+        "category": "productivity"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["generate_quiz", "create_flashcards", "generate_study_plan", "explain_concept"]
+    },
+    "coding_assistant": {
+      "enabled": true,
+      "module": "src.tools.coding_assistant",
+      "class": "CodingAssistantTool",
+      "display": {
+        "name": "编程辅助",
+        "emoji": "💻",
+        "description": "编程助手：代码模板生成、代码分析、测试生成、代码格式化",
+        "category": "development"
+      },
+      "config": {
+        "output_dir": "generated"
+      },
+      "security": {
+        "risk_level": "medium",
+        "require_confirmation": true
+      },
+      "actions": ["generate_code_template", "analyze_code", "generate_tests", "format_code"]
     }
   },
   "categories": {
@@ -710,6 +1014,31 @@
       "name": "内容生成",
       "emoji": "✨",
       "description": "文档生成、图像生成等 AI 内容创作工具"
+    },
+    "document": {
+      "name": "文档处理",
+      "emoji": "📄",
+      "description": "合同、简历、思维导图等文档生成工具"
+    },
+    "data": {
+      "name": "数据分析",
+      "emoji": "📊",
+      "description": "财务报告、数据处理等数据分析工具"
+    },
+    "media": {
+      "name": "媒体处理",
+      "emoji": "🎵",
+      "description": "语音识别、音视频处理等媒体工具"
+    },
+    "productivity": {
+      "name": "效率工具",
+      "emoji": "⚡",
+      "description": "教育学习、任务管理等提升效率的工具"
+    },
+    "development": {
+      "name": "开发工具",
+      "emoji": "🔧",
+      "description": "代码生成、代码分析等编程辅助工具"
     }
   },
   "global_settings": {
