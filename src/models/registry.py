@@ -646,6 +646,16 @@ class ModelRegistry:
     def total_tokens(self) -> int:
         return sum(r.total_tokens for r in self._usage_history)
 
+    @property
+    def total_prompt_tokens(self) -> int:
+        """所有历史调用的输入 Token 累计。"""
+        return sum(r.prompt_tokens for r in self._usage_history)
+
+    @property
+    def total_completion_tokens(self) -> int:
+        """所有历史调用的输出 Token 累计。"""
+        return sum(r.completion_tokens for r in self._usage_history)
+
     def get_usage_summary(self) -> dict[str, Any]:
         return {
             "total_calls": len(self._usage_history),

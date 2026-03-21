@@ -2,8 +2,8 @@
 
 > 你的随身 AI 桌面管家 - 22+ 工具 + 移动端远程控制
 
-**版本**: v2.7.3  
-**更新日期**: 2026 年 3 月 2 日
+**版本**: v2.9.2  
+**更新日期**: 2026 年 3 月 21 日
 
 Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**身材小巧**（仅 Python 环境即可运行），但**内含 22+ 实用工具**，从文件管理、浏览器自动化到语音交互 OCR 识别样样精通。
 
@@ -67,22 +67,7 @@ Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**
 - **离线容错**：离线消息自动保存和恢复，重连后批量推送（v2.7.2）
 - **Markdown 渲染**：完整 Markdown 语法支持，移动端友好显示（v2.7.2）
 
-### 神经形态意识系统（Phase 4）
 
-- **LLM 认知增强**：四大认知功能（自我反思/元认知解释/意识对话/参数建议）
-- **Kahneman 双系统架构**：系统 1（快意识）+ 系统 2（慢意识深度反思）
-- **脑区映射工程**：DMN（默认模式网络）/ BA10（额极皮层）/ dlPFC（背外侧前额叶）
-- **自动反思触发**：每 200 个意识周期自动生成自我分析报告
-- **Markdown 导出增强**：实验报告嵌入 LLM 自然语言分析
-
-### 神经形态意识系统（Phase 5）
-
-- **表征桥接层**：LLM embedding ↔ 神经脉冲双向翻译（稀疏随机投影 + 速率/时间编码）
-- **意识度量**：6维意识评估体系（自由能稳定性/预测准确率/情感一致性/叙事稳定性/Φ值/自主性）
-- **发育引擎**：6阶段渐进式发育课程（感觉→情感→因果→自我→社会→元认知）
-- **拓扑蒸馏**：LLM 知识图谱 → SNN 突触拓扑的跨架构映射
-- **先验注入**：预测编码层支持 LLM 蒸馏先验混合（α 随发育递减）
-- **语义锚定**：符号知识 ↔ 神经体验模式的 Hebbian 绑定
 
 ## 技术架构
 
@@ -127,7 +112,7 @@ weclaw/
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/wyg5208/WinClaw.git
+git clone https://github.com/wyg5208/WeClaw.git
 cd WinClaw/weclaw
 
 # 2. 创建虚拟环境（推荐）
@@ -1062,6 +1047,66 @@ Phase 6 引入四大进化机制，让神经网络能够像人脑一样自我优
 
 ---
 
+### v2.8.0 更新日志 2026 年 3 月 13 日
+
+**远程绑定与后台管理模块**
+
+1. **远程绑定持久化修复**：
+   - 修复绑定状态无法保存的问题
+   - JWT Token 安全存储到 keystore
+   - 重启应用后自动加载已保存的 Token
+
+2. **后台管理系统研发**：
+   - 完整的 Web 管理后台（FastAPI + Jinja2）
+   - 用户管理、设备管理、日志中心、统计分析
+   - JWT 认证 + 权限控制
+
+3. **安全加固**：
+   - 禁止跨用户绑定
+   - 数据库局部唯一索引防止重复绑定
+   - 管理员凭据外部化（.env 方式）
+
+4. **PWA 端优化**：
+   - 响应路由request_id修复
+   - 注册流程密码验证规则统一
+   - 设备绑定检查机制
+
+5. **Tool Call 消息完整性修复**：
+   - 连续失败时为剩余 tool_call 补充错误消息
+   - 确保对话历史结构完整
+
+### v2.9.2 更新日志 2026 年 3 月 21 日
+
+**Bug修复：Token 用量显示修复**
+
+1. **修复 Token 用量面板显示问题**：
+   - 修复桌面端右侧面板 Token 用量显示异常（输入/输出始终为 0）
+   - 根因：`gui_app.py` 信号发射时硬编码 `0, 0`，缺少真实 Token 统计
+   - 新增 `ModelRegistry.total_prompt_tokens` 和 `total_completion_tokens` 聚合属性
+   - 修正 `usage_updated.emit()` 使用真实数据
+
+2. **技术改进**：
+   - 数据聚合属性完整性：覆盖 prompt_tokens、completion_tokens 字段
+   - 信号机制正确传递 Token 统计数据到 UI 层
+
+---
+
+### v2.9.0 更新日志 2026 年 3 月 14 日
+
+**前端优化与性能提升**
+
+1. **管理后台CDN资源本地化**：
+   - Tailwind CSS 和 Chart.js 本地部署
+   - 移除 console.warn 警告代码
+   - FastAPI StaticFiles 配置
+
+2. **启动性能优化**：
+   - Whisper 懒加载改造
+   - MCP Server 并行连接
+   - 启动时间减少约 15 秒
+
+---
+
 ### v2.7.2 更新日志 2026 年 2 月 26 日
 
 **PWA 离线容错优化 + Markdown 渲染增强**
@@ -1091,16 +1136,16 @@ Phase 6 引入四大进化机制，让神经网络能够像人脑一样自我优
    - marked v17 API 兼容（直接调用函数，传入配置选项）
 
 **修改文件**：
-- `winclaw_server/remote_server/models/offline_message.py` (新建，106 行)
-- `winclaw_server/remote_server/services/message_queue.py` (新建，295 行)
-- `winclaw_server/remote_server/i18n/__init__.py` (新建，145 行)
-- `winclaw_server/remote_server/i18n/messages.json` (新建，19 行)
-- `winclaw_server/remote_server/monitoring/alerts.py` (新建，238 行)
-- `winclaw_server/pwa/src/views/Chat.vue` (修改，+86 行)
-- `winclaw_server/pwa/src/types/marked.d.ts` (新建，70 行)
-- `winclaw_server/remote_server/main.py` (修改，+17 行)
-- `winclaw_server/remote_server/websocket/handlers.py` (修改，+7 行)
-- `winclaw_server/remote_client/client.py` (修改，+28 行)
+- `weclaw_server/remote_server/models/offline_message.py` (新建，106 行)
+- `weclaw_server/remote_server/services/message_queue.py` (新建，295 行)
+- `weclaw_server/remote_server/i18n/__init__.py` (新建，145 行)
+- `weclaw_server/remote_server/i18n/messages.json` (新建，19 行)
+- `weclaw_server/remote_server/monitoring/alerts.py` (新建，238 行)
+- `weclaw_server/pwa/src/views/Chat.vue` (修改，+86 行)
+- `weclaw_server/pwa/src/types/marked.d.ts` (新建，70 行)
+- `weclaw_server/remote_server/main.py` (修改，+17 行)
+- `weclaw_server/remote_server/websocket/handlers.py` (修改，+7 行)
+- `weclaw_server/remote_client/client.py` (修改，+28 行)
 
 **测试验证**：
 - ✅ 离线消息存入数据库

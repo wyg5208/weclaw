@@ -166,7 +166,9 @@ class GuiAgent(QObject):
 
             # 更新用量
             cost = self._model_registry.total_cost
-            self.usage_updated.emit(0, 0, cost)
+            prompt_tokens = self._model_registry.total_prompt_tokens
+            completion_tokens = self._model_registry.total_completion_tokens
+            self.usage_updated.emit(prompt_tokens, completion_tokens, cost)
 
         except asyncio.CancelledError:
             raise
@@ -212,6 +214,10 @@ class WinClawGuiApp:
 
         # 历史会话缓存
         self._cached_history: list = []
+
+        # 远程 PWA 请求追踪
+        self._remote_request_active: bool = False
+        self._remote_username: str = ""
 
     @staticmethod
     def _load_dotenv() -> None:
@@ -451,20 +457,29 @@ class WinClawGuiApp:
                 logger.debug("没有启用的 MCP Server")
                 return
             
-            # 异步连接 MCP Server
+            # 异步并行连接 MCP Server
+            async def _connect_single_server(config):
+                """连接单个 MCP Server。"""
+                try:
+                    success = await self._mcp_manager.connect_server(config)
+                    if success:
+                        # 注册到工具注册表
+                        from src.tools.mcp_bridge import create_mcp_bridge_tools
+                        create_mcp_bridge_tools(
+                            self._mcp_manager,
+                            self._tool_registry
+                        )
+                except Exception as e:
+                    logger.warning("连接 MCP Server %s 失败: %s", config.name, e)
+            
             async def _connect_mcp_servers():
-                for config in enabled_servers:
-                    try:
-                        success = await self._mcp_manager.connect_server(config)
-                        if success:
-                            # 注册到工具注册表
-                            from src.tools.mcp_bridge import create_mcp_bridge_tools
-                            create_mcp_bridge_tools(
-                                self._mcp_manager,
-                                self._tool_registry
-                            )
-                    except Exception as e:
-                        logger.warning("连接 MCP Server %s 失败: %s", config.name, e)
+                """并行连接所有 MCP Server。"""
+                import asyncio
+                # 使用 asyncio.gather 并行执行所有连接任务
+                await asyncio.gather(
+                    *[_connect_single_server(config) for config in enabled_servers],
+                    return_exceptions=True
+                )
             
             # 使用异步桥接执行
             if self._bridge and self._bridge._loop:
@@ -641,6 +656,9 @@ class WinClawGuiApp:
 
         # 设置文件生成事件订阅
         self._setup_file_generated_events()
+
+        # 设置远程 PWA 请求事件订阅（工具状态面板同步）
+        self._setup_remote_events()
 
         # 设置 CommandHandler 的 agent 引用（用于命令切换模型）
         if self._window._cmd_handler:
@@ -1702,6 +1720,79 @@ class WinClawGuiApp:
         if self._window:
             self._window.add_tool_log("⚠️ 工作流取消功能待实现")
             self._window.workflow_panel.reset()
+
+    def _setup_remote_events(self) -> None:
+        """订阅远程 PWA 请求事件，实时更新工具执行面板并标注来源。
+        
+        远程 PWA 请求直接调用 agent.chat_stream() 而不经过 GuiAgent.chat()，
+        因此需要在 agent.event_bus 上单独订阅，以驱动工具状态面板更新。
+        工具日志条目将以 📱[PWA] 前缀标注，区别于本地请求。
+        """
+        if not self._agent:
+            return
+
+        event_bus = self._agent.event_bus
+
+        def _safe_set_tool_status(status: str) -> None:
+            if self._window is not None:
+                try:
+                    self._window.set_tool_status(status)
+                except RuntimeError:
+                    pass
+
+        def _safe_add_tool_log(entry: str) -> None:
+            if self._window is not None:
+                try:
+                    self._window.add_tool_log(entry)
+                except RuntimeError:
+                    pass
+
+        def _safe_clear_tool_log() -> None:
+            if self._window is not None:
+                try:
+                    self._window.clear_tool_log()
+                except RuntimeError:
+                    pass
+
+        async def on_remote_request_started(event_type, data):
+            """远程请求开始：清空日志、设置来源标识。"""
+            username = "远程用户"
+            if isinstance(data, dict):
+                username = data.get("username") or data.get("user_id", "远程用户")
+                if len(username) > 12:
+                    username = username[:12]
+            self._remote_request_active = True
+            self._remote_username = username
+            _safe_set_tool_status(f"📱[PWA:{username}] 生成中...")
+            _safe_clear_tool_log()
+            _safe_add_tool_log(f"📱 [PWA 远程请求] 用户: {username}")
+
+        async def on_remote_request_ended(event_type, data):
+            """远程请求结束：标记完成状态。"""
+            username = self._remote_username or "远程用户"
+            self._remote_request_active = False
+            self._remote_username = ""
+            _safe_set_tool_status(f"📱[PWA:{username}] 完成")
+
+        async def on_tool_call_remote(event_type, data):
+            """工具调用开始（仅在远程请求期间生效）。"""
+            if not self._remote_request_active:
+                return
+            _safe_set_tool_status(f"📱[PWA] 执行：{data.tool_name}.{data.action_name}")
+            _safe_add_tool_log(f"📱 ▶ {data.tool_name}.{data.action_name}")
+
+        async def on_tool_result_remote(event_type, data):
+            """工具调用完成（仅在远程请求期间生效）。"""
+            if not self._remote_request_active:
+                return
+            output = data.output or ""
+            preview = output[:150] + ("..." if len(output) > 150 else "")
+            _safe_add_tool_log(f"📱 ✔ {data.tool_name}.{data.action_name} → {preview}")
+
+        event_bus.on("remote_request_started", on_remote_request_started)
+        event_bus.on("remote_request_ended", on_remote_request_ended)
+        event_bus.on("tool_call", on_tool_call_remote)
+        event_bus.on("tool_result", on_tool_result_remote)
 
 
 def main() -> int:
