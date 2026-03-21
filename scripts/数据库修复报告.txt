@@ -1,0 +1,50 @@
+================================================================================
+数据库修复完成报告
+================================================================================
+
+修复时间：2026-03-13
+修复工具：scripts/fix_duplicate_fingerprints.py
+
+【修复前状态】
+- 总绑定记录数：6
+- Active 绑定数：4
+- 重复设备指纹数：1 个（3 条记录重复）
+- 重复指纹：1892f5fb4d2996be...
+
+【修复操作】
+删除了 2 条重复的 active 绑定记录，保留每个指纹最新的绑定
+
+【修复后状态】
+✓ 无重复设备指纹
+✓ Active 绑定数：2
+✓ 唯一设备指纹数：2
+✓ 可以正常部署到服务器
+
+【已修复的绑定记录】
+1. binding_id: 68792c20-698d-400c-a7b7-ae64bf99d4f8
+   user: 6a5f6c84..., device: 00f2e0cb..., fp: a993e014...
+
+2. binding_id: 7810c704-2a5c-479d-8ae2-79fc5761bc47
+   user: 96f29153..., device: f492138d..., fp: 1892f5fb...
+
+【下一步操作】
+1. 将修复后的数据库文件复制到服务器：
+   weclaw_server/data/remote_users.db
+
+2. 同时复制更新后的代码文件（已在之前的整改中修改）：
+   - remote_server/auth/user_manager.py
+   - remote_server/models/user.py
+   - remote_server/api/auth.py
+   - remote_server/api/chat.py
+   - remote_server/websocket/bridge_handler.py
+
+3. 在服务器上重启服务：
+   python -m uvicorn remote_server.main:app --host 0.0.0.0 --port 8188
+
+4. 观察启动日志，应该不再出现 "UNIQUE constraint failed" 错误
+
+【验证方法】
+服务启动后，检查日志中是否有以下成功信息：
+[INFO] 数据库迁移成功：创建设备指纹唯一索引
+
+================================================================================

@@ -6,7 +6,7 @@ Write-Host ""
 
 # 1. 重新编译 PWA（强制清除旧 Service Worker）
 Write-Host "[1/4] 正在重新编译 PWA 应用..." -ForegroundColor Yellow
-Set-Location d:\python_projects\winclaw_server\pwa
+Set-Location d:\python_projects\weclaw_server\pwa
 npm run build
 if ($LASTEXITCODE -ne 0) {
     Write-Host "✗ PWA 编译失败！" -ForegroundColor Red
@@ -18,7 +18,7 @@ Write-Host ""
 
 # 2. 复制更新后的文件到部署目录
 Write-Host "[2/4] 正在部署 PWA 文件..." -ForegroundColor Yellow
-Copy-Item ".\dist\*" "d:\python_projects\winclaw_server\pwa\dist\" -Recurse -Force
+Copy-Item ".\dist\*" "d:\python_projects\weclaw_server\pwa\dist\" -Recurse -Force
 Write-Host "✓ PWA 文件已部署" -ForegroundColor Green
 Write-Host ""
 

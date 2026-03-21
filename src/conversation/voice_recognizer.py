@@ -131,20 +131,39 @@ class VoiceRecognizer(QObject):
 
     def _engine_init(self) -> None:
         """初始化识别引擎。"""
-        # 优先尝试使用whisper
+        # Whisper 改为懒加载，不在启动时初始化
+        self._whisper_available = False
+        self._whisper_model = None
+        
+        # 直接尝试使用 speech_recognition
+        self._init_speech_recognition()
+    
+    def _init_whisper(self) -> bool:
+        """懒加载 Whisper 模型。
+        
+        Returns:
+            是否成功加载
+        """
+        if self._whisper_available and self._whisper_model is not None:
+            return True
+            
         try:
             import whisper
             self._whisper_model = whisper.load_model("base", device="cpu")
             self._whisper_available = True
             self._active_engine = RecognizerEngine.WHISPER
-            logger.info("语音识别引擎初始化成功: Whisper (CPU)")
-            return
+            logger.info("Whisper 模型懒加载成功")
+            return True
         except ImportError:
-            logger.warning("whisper未安装")
+            logger.debug("whisper 未安装，跳过懒加载")
+            return False
         except Exception as e:
-            logger.warning(f"whisper加载失败: {e}")
+            logger.debug(f"whisper 懒加载失败: {e}")
+            return False
+    
+    def _init_speech_recognition(self) -> None:
+        """初始化 SpeechRecognition 引擎。"""
 
-        # 尝试使用speech_recognition
         try:
             import speech_recognition as sr
             self._recognizer = sr.Recognizer()
@@ -161,7 +180,7 @@ class VoiceRecognizer(QObject):
             logger.info("语音识别引擎初始化成功: SpeechRecognition")
 
         except ImportError:
-            logger.error("speech_recognition库和whisper都未安装")
+            logger.error("speech_recognition库未安装")
             self._active_engine = None
         except Exception as e:
             logger.error(f"语音识别初始化失败: {e}")

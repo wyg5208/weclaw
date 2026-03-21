@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-3xl font-bold text-cyan-400 mb-6">用户管理</h1>
+    
+    <!-- 搜索和筛选 -->
+    <div class="cyber-card rounded-xl p-6">
+        <div class="flex flex-wrap gap-4">
+            <input 
+                type="text" 
+                id="search-input" 
+                placeholder="搜索用户名..." 
+                class="cyber-input px-4 py-2 rounded-lg flex-1 min-w-[200px]"
+            >
+            <select id="bound-filter" class="cyber-input px-4 py-2 rounded-lg">
+                <option value="">所有状态</option>
+                <option value="true">已绑定</option>
+                <option value="false">未绑定</option>
+            </select>
+            <button onclick="loadUsers()" class="cyber-button px-6 py-2 rounded-lg text-white">
+                搜索
+            </button>
+        </div>
+    </div>
+    
+    <!-- 用户列表 -->
+    <div class="cyber-card rounded-xl p-6">
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr>
+                        <th class="py-3 px-4">用户名</th>
+                        <th class="py-3 px-4">用户 ID</th>
+                        <th class="py-3 px-4">注册时间</th>
+                        <th class="py-3 px-4">绑定状态</th>
+                        <th class="py-3 px-4">Token 状态</th>
+                        <th class="py-3 px-4">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="users-table">
+                    <tr><td colspan="6" class="text-center text-gray-500 py-8">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- 分页 -->
+        <div class="flex justify-between items-center mt-6">
+            <p id="page-info" class="text-gray-400 text-sm"></p>
+            <div class="flex gap-2">
+                <button onclick="prevPage()" class="px-4 py-2 cyber-card rounded-lg hover:bg-cyan-500/20 disabled:opacity-50" id="prev-btn">上一页</button>
+                <button onclick="nextPage()" class="px-4 py-2 cyber-card rounded-lg hover:bg-cyan-500/20 disabled:opacity-50" id="next-btn">下一页</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentPage = 1;
+const pageSize = 20;
+let currentToken = localStorage.getItem('admin_token');
+
+if (!currentToken) {
+    window.location.href = '/admin/login';
+}
+
+async function loadUsers() {
+    try {
+        const search = document.getElementById('search-input').value;
+        const bound = document.getElementById('bound-filter').value;
+        
+        let url = `/admin/users/list?page=${currentPage}&page_size=${pageSize}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        if (bound !== '') url += `&bound=${bound}`;
+        
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (!response.ok) {
+            if (response.status === 401) {
+                localStorage.removeItem('admin_token');
+                window.location.href = '/admin/login';
+            }
+            throw new Error('加载失败');
+        }
+        
+        const data = await response.json();
+        renderUsers(data.items);
+        updatePagination(data.page, data.total_pages, data.total);
+        
+    } catch (err) {
+        console.error('加载用户列表失败:', err);
+        document.getElementById('users-table').innerHTML = 
+            '<tr><td colspan="6" class="text-center text-red-400 py-8">加载失败</td></tr>';
+    }
+}
+
+function renderUsers(users) {
+    const tbody = document.getElementById('users-table');
+    if (users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-500 py-8">暂无数据</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = users.map(user => `
+        <tr>
+            <td class="py-3 px-4">${user.username}</td>
+            <td class="py-3 px-4 font-mono text-xs">${user.user_id.slice(0, 8)}...</td>
+            <td class="py-3 px-4 text-sm">${user.created_at ? user.created_at.split('T')[0] : '-'}</td>
+            <td class="py-3 px-4">
+                ${user.is_bound ? 
+                    '<span class="text-green-400">✓ 已绑定</span>' : 
+                    '<span class="text-gray-500">未绑定</span>'}
+            </td>
+            <td class="py-3 px-4">
+                ${user.tokens_revoked_at ? 
+                    '<span class="text-pink-400">已吊销</span>' : 
+                    '<span class="text-cyan-400">正常</span>'}
+            </td>
+            <td class="py-3 px-4">
+                <button onclick="viewUser('${user.user_id}')" class="text-cyan-400 hover:text-cyan-300 mr-3">详情</button>
+                ${!user.tokens_revoked_at ? `
+                    <button onclick="revokeToken('${user.user_id}')" class="text-pink-400 hover:text-pink-300 mr-3">吊销 Token</button>
+                ` : ''}
+                ${!user.is_bound ? `
+                    <button onclick="deleteUser('${user.user_id}')" class="text-red-400 hover:text-red-300">删除</button>
+                ` : ''}
+            </td>
+        </tr>
+    `).join('');
+}
+
+function updatePagination(page, totalPages, total) {
+    document.getElementById('page-info').textContent = `第 ${page}/${totalPages} 页，共 ${total} 条记录`;
+    document.getElementById('prev-btn').disabled = page === 1;
+    document.getElementById('next-btn').disabled = page === totalPages;
+}
+
+function prevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        loadUsers();
+    }
+}
+
+function nextPage() {
+    currentPage++;
+    loadUsers();
+}
+
+async function viewUser(userId) {
+    alert('查看用户详情功能开发中...');
+}
+
+async function revokeToken(userId) {
+    if (!confirm('确定要吊销该用户的 Token 吗？')) return;
+    
+    try {
+        const response = await fetch(`/admin/users/${userId}/revoke`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (response.ok) {
+            alert('Token 已吊销');
+            loadUsers();
+        } else {
+            const error = await response.json();
+            alert('操作失败：' + error.detail);
+        }
+    } catch (err) {
+        alert('操作失败');
+    }
+}
+
+async function deleteUser(userId) {
+    if (!confirm('确定要删除该用户吗？此操作不可恢复！')) return;
+    
+    try {
+        const response = await fetch(`/admin/users/${userId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (response.ok) {
+            alert('用户已删除');
+            loadUsers();
+        } else {
+            const error = await response.json();
+            alert('删除失败：' + error.detail);
+        }
+    } catch (err) {
+        alert('删除失败');
+    }
+}
+
+// 初始化加载
+loadUsers();
+</script>
+{% endblock %}

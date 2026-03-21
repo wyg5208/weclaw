@@ -106,6 +106,15 @@ async def get_current_user_with_db(
     if not user.is_active:
         raise HTTPException(status_code=403, detail="账户已禁用")
     
+    # [建议D] 检查 Token 是否已被吊销
+    token_iat = payload.get("iat", 0)
+    if user_manager.is_token_revoked(user_id, token_iat):
+        raise HTTPException(
+            status_code=401,
+            detail="Token 已被吊销，请重新登录",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
     return {"payload": payload, "user": user}
 
 
@@ -192,9 +201,11 @@ async def login(request: LoginRequest):
         try:
             access_token = rsa_handler.encrypt_for_user(access_token, user.public_key)
         except Exception as e:
-            logger.warning(f"加密令牌失败，返回明文: {e}")
+            logger.warning(f"加密令牌失败，返回明文：{e}")
     
-    logger.info(f"用户登录成功: {request.username}")
+    # [调试] 记录详细的登录信息
+    logger.info(f"用户登录成功：{request.username} (user_id={user.user_id[:8]}, has_device_fp={bool(request.device_fingerprint)})")
+    logger.debug(f"[DEBUG] 生成 Token: user_id={user.user_id[:8]}, fp={request.device_fingerprint[:16] if request.device_fingerprint else 'None'}")
     
     return TokenResponse(
         access_token=access_token,
@@ -275,16 +286,22 @@ async def get_me(user_info: dict = Depends(get_current_user_with_db)):
 
 
 @router.post("/logout", summary="退出登录")
-async def logout(user_info: dict = Depends(get_current_user_with_db)):
+async def logout(user_info: dict = Depends(get_current_user_with_db),
+                 credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
     退出登录
     
-    注：JWT 无状态，服务端不维护会话状态。
-    客户端应删除本地存储的 Token。
-    如需强制失效，需实现 Token 黑名单。
+    [建议D] 服务端主动吊销该用户所有 Token，
+    确保即使客户端未删除本地 Token 也无法再使用。
     """
     user = user_info["user"]
-    logger.info(f"用户退出登录: {user.username}")
+    user_manager = context.get_user_manager()
+    
+    # [建议D] 吊销该用户的所有 Token
+    if user_manager:
+        user_manager.revoke_tokens(user.user_id)
+    
+    logger.info(f"用户退出登录并吊销 token: {user.username}")
     
     return {
         "success": True,
@@ -352,9 +369,10 @@ async def bind_device(request: BindDeviceRequest):
     注意：此 API 不需要认证，通过 binding_token 验证用户身份。
     """
     user_manager = context.get_user_manager()
+    jwt_handler = context.get_jwt_handler()
     
-    if not user_manager:
-        raise HTTPException(status_code=500, detail="用户管理器未初始化")
+    if not user_manager or not jwt_handler:
+        raise HTTPException(status_code=500, detail="用户管理器或 JWT 处理器未初始化")
     
     # 验证设备指纹
     if not request.device_fingerprint:
@@ -384,37 +402,90 @@ async def bind_device(request: BindDeviceRequest):
     if not success:
         raise HTTPException(status_code=400, detail="绑定失败，请检查 Token 是否正确或设备是否已被绑定")
     
-    logger.info(f"设备绑定成功: user={user_id[:8]}, device={device_id[:8]}")
+    logger.info(f"设备绑定成功：user={user_id[:8]}, device={device_id[:8]}")
+    
+    # ✅ 新增：生成 JWT Token 对，用于后续认证
+    token_pair = jwt_handler.create_token_pair(
+        user_id=user_id,
+        device_fingerprint=request.device_fingerprint
+    )
     
     return {
         "success": True,
         "device_id": device_id,
         "device_name": request.device_name or f"WinClaw-{device_id[:8]}",
         "device_fingerprint": request.device_fingerprint[:16] + "...",
-        "message": "设备绑定成功"
+        "message": "设备绑定成功",
+        "access_token": token_pair["access_token"],
+        "refresh_token": token_pair["refresh_token"],
+        "token_type": token_pair.get("token_type", "Bearer")
     }
 
 
 @router.get("/device", response_model=DeviceInfoResponse, summary="获取绑定的设备信息")
 async def get_device_info(user_info: dict = Depends(get_current_user_with_db)):
-    """获取当前用户绑定的设备信息"""
+    """获取当前用户绑定的设备信息（包含在线状态）"""
     user = user_info["user"]
+    payload = user_info.get("payload", {})
+    
     user_manager = context.get_user_manager()
     
     if not user_manager:
         raise HTTPException(status_code=500, detail="用户管理器未初始化")
     
+    # [调试] 记录 Token 中的用户 ID 和实际用户名
+    token_user_id = payload.get("sub", "unknown")[:8]
+    logger.debug(f"[DEBUG] Token 中的 user_id: {token_user_id}, 解析出的用户名：{user.username}")
+    
     device_info = user_manager.get_user_device(user.user_id)
     
     if not device_info:
+        logger.warning(f"用户 {user.username} (user_id={user.user_id[:8]}) 未找到设备绑定信息")
         raise HTTPException(status_code=404, detail="未绑定设备")
+    
+    # ✅ 新增：检查设备在线状态
+    from ..websocket.bridge_handler import get_bridge_manager
+    bridge_manager = get_bridge_manager()
+    
+    is_online = False
+    connection_details = None
+    
+    if bridge_manager:
+        # 检查用户是否有活跃的连接
+        user_connections = bridge_manager.get_user_connections(user.user_id)
+        is_online = len(user_connections) > 0
+        
+        # 收集连接详情
+        if is_online:
+            connection_details = {
+                "session_count": len(user_connections),
+                "sessions": [
+                    {
+                        "session_id": conn.session_id[:16],
+                        "device_name": conn.device_name,
+                        "connected_at": conn.connected_at.isoformat() if conn.connected_at else None,
+                        "last_heartbeat": conn.last_heartbeat.isoformat() if conn.last_heartbeat else None
+                    }
+                    for conn in user_connections
+                ]
+            }
+    
+    # 合并在线状态到设备信息
+    # 注意：保留数据库中的 status 值（'active'），用 is_online 表示在线状态
+    # 前端通过 hasDevice = status === 'active' 判断是否绑定
+    device_info["is_online"] = is_online
+    # 不覆盖 status 字段，保持数据库中的值（'active' 或其他）
+    if connection_details:
+        device_info["connection_details"] = connection_details
+    
+    logger.info(f"用户 {user.username} (user_id={user.user_id[:8]}, token_sub={token_user_id}) 查询设备状态：{'在线' if is_online else '离线'}，device_info={device_info}")
     
     return DeviceInfoResponse(**device_info)
 
 
 @router.delete("/device", summary="解绑设备")
 async def unbind_device(user_info: dict = Depends(get_current_user_with_db)):
-    """解绑当前用户的设备"""
+    """解绑当前用户的设备，并吊销相关 Token"""
     user = user_info["user"]
     user_manager = context.get_user_manager()
     
@@ -426,7 +497,10 @@ async def unbind_device(user_info: dict = Depends(get_current_user_with_db)):
     if not success:
         raise HTTPException(status_code=404, detail="未找到绑定的设备")
     
-    logger.info(f"用户 {user.username} 解绑设备")
+    # [建议D] 解绑同时吊销该用户的所有 Token，防止老 token 被继续用于连接
+    user_manager.revoke_tokens(user.user_id)
+    
+    logger.info(f"用户 {user.username} 解绑设备并吊销 token")
     
     return {
         "success": True,

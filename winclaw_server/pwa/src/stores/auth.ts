@@ -124,13 +124,17 @@ export const useAuthStore = defineStore('auth', () => {
         public_key: publicKey
       })
 
-      // API 直接返回数据
-      const data = response.data as unknown as {
-        user_id: string
-        username: string
+      // API 返回格式：{ success: true, data: { user_id, username, created_at } }
+      const responseData = response.data as unknown as {
+        success: boolean
+        data: {
+          user_id: string
+          username: string
+          created_at: string
+        }
       }
 
-      if (data.user_id) {
+      if (responseData.success && responseData.data.user_id) {
         return true
       } else {
         error.value = '注册失败'

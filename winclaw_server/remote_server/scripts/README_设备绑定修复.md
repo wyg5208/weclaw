@@ -74,7 +74,7 @@ except Exception as e:
 3. **重启服务器**：
    ```bash
    # 在项目根目录
-   python -m winclaw_server.remote_server.main
+   python -m weclaw_server.remote_server.main
    ```
    
    服务器会自动执行修复脚本，日志中会显示：
@@ -97,7 +97,7 @@ python scripts/fix_device_bindings.py
 
 输出示例：
 ```
-使用数据库：D:\python_projects\weclaw\winclaw_server\remote_server\data\remote_users.db
+使用数据库：D:\python_projects\weclaw\weclaw_server\remote_server\data\remote_users.db
 
 === 修复前的数据状态 ===
 总记录数：5

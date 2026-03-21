@@ -1,0 +1,215 @@
+# 微信配置 - Weclaw 微信消息管理工具
+
+# ===================================================================
+# 基础配置
+# ===================================================================
+
+# 微信进程名（支持多个，逗号分隔）
+process_name: "Weixin.exe,WeChat.exe"
+
+# ===================================================================
+# 窗口控制配置
+# ===================================================================
+
+window:
+  # 激活窗口的快捷键
+  activate_hotkey: "Ctrl+Alt+W"
+  
+  # 窗口状态检查间隔（秒）
+  check_interval: 10.0
+  
+  # 输入框聚焦策略
+  focus_strategy: "double_click"  # double_click | keyboard_nav
+
+# ===================================================================
+# 消息监听配置
+# ===================================================================
+
+message_monitor:
+  # 是否启用消息监听
+  enabled: true
+  
+  # 消息检查间隔（秒）
+  check_interval: 10.0
+  
+  # OCR 识别引擎
+  ocr_engine: "glm"  # glm | tesseract | paddle
+  
+  # 图像 Hash 阈值（超过此值认为有变化）
+  image_hash_threshold: 0.95
+  
+  # 截图区域（相对于屏幕的坐标）
+  screenshot_region:
+    x: 0
+    y: 0
+    width: 800
+    height: 600
+
+# ===================================================================
+# 智能回复配置
+# ===================================================================
+
+llm:
+  # 是否启用智能回复
+  enabled: true
+  
+  # 回复延迟范围（秒），模拟真人输入
+  delay_min: 3.0
+  delay_max: 8.0
+  
+  # 最大上下文长度（轮数）
+  max_context_length: 10
+  
+  # 系统提示词（定义回复风格）
+  system_prompt: |
+    你是一个友好的微信助手，回复风格自然、亲切、简洁。
+    使用口语化表达，避免过于正式。
+    回答要准确、有帮助，但不要冗长。
+  
+  # 排除的聊天（关键词模糊匹配，不回复这些聊天）
+  exclude_chats:
+    - "文件传输助手"
+    - "信用卡"
+    - "银行"
+    - "微信支付"
+    - "服务通知"
+    - "订阅号消息"
+    - "快递"
+    - "外卖"
+  
+  # LLM API 配置
+  glm:
+    # OCR 识别模型
+    vision_model: "glm-4.5v"
+    
+    # 对话生成模型
+    chat_model: "glm-4-flash"
+    
+    # API Key 环境变量名
+    api_key_env: "GLM_API_KEY"
+    
+    # API Base URL（可选，使用代理时设置）
+    base_url: ""
+    
+    # 请求超时（秒）
+    timeout: 30
+  
+  # 其他 LLM 提供商配置（可选）
+  alternative_llms:
+    deepseek:
+      model: "deepseek-chat"
+      api_key_env: "DEEPSEEK_API_KEY"
+    
+    kimi:
+      model: "moonshot-v1-8k"
+      api_key_env: "KIMI_API_KEY"
+
+# ===================================================================
+# 知识库客服配置
+# ===================================================================
+
+knowledge_base:
+  # 是否启用知识库
+  enabled: true
+  
+  # SQLite 数据库路径
+  db_path: "data/wechat_knowledge.db"
+  
+  # FAQ JSON 文件路径
+  faq_file: "data/wechat_faq.json"
+  
+  # Embedding 模型
+  embedding_model: "bge-small-zh"
+  
+  # 知识文档目录（用于 RAG）
+  knowledge_dir: "data/knowledge"
+  
+  # 置信度阈值（低于此值使用 LLM 生成）
+  confidence_threshold: 0.7
+  
+  # 无匹配时是否使用 LLM 生成
+  fallback_to_llm: true
+  
+  # 工作时间（只在时间内启用客服）
+  working_hours: "09:00-18:00"
+  
+  # 欢迎语（客服模式启用时自动发送）
+  greeting_message: "您好！我是智能客服，请问有什么可以帮您？"
+
+# ===================================================================
+# 定时任务配置
+# ===================================================================
+
+scheduled_tasks:
+  # 早安问候
+  - name: "morning_greeting"
+    schedule: "0 9 * * *"  # 每天早上 9 点
+    message: "早上好！今天有什么计划吗？"
+    target_chat: "家人群"
+    enabled: false
+  
+  # 晚安问候
+  - name: "evening_greeting"
+    schedule: "0 22 * * *"  # 每天晚上 10 点
+    message: "晚安，好梦~"
+    target_chat: "家人群"
+    enabled: false
+  
+  # 定时检查未读消息
+  - name: "check_unread"
+    schedule: "0 */2 * * *"  # 每 2 小时
+    action: "view_messages"
+    params:
+      limit: 50
+    enabled: false
+  
+  # 工作日提醒
+  - name: "workday_reminder"
+    schedule: "0 8 * * 1-5"  # 每周一到周五早上 8 点
+    message: "工作日到了，加油！记得处理客户咨询。"
+    target_chat: "文件传输助手"
+    enabled: false
+
+# ===================================================================
+# 高级配置
+# ===================================================================
+
+advanced:
+  # 日志级别
+  log_level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+  
+  # 日志文件路径
+  log_file: "logs/wechat_tool.log"
+  
+  # 是否记录详细调试信息
+  debug_mode: false
+  
+  # 错误重试次数
+  max_retries: 2
+  
+  # 重试间隔（秒）
+  retry_delay: 1.0
+  
+  # 性能监控
+  performance_monitoring:
+    enabled: false
+    metrics_interval: 60  # 指标收集间隔（秒）
+
+# ===================================================================
+# 安全配置
+# ===================================================================
+
+security:
+  # 敏感操作需要确认
+  require_confirmation_for:
+    - "send_message"
+    - "switch_chat"
+  
+  # 黑名单联系人（不回复）
+  blacklist: []
+  
+  # 白名单联系人（只回复这些）
+  whitelist: []
+  
+  # 白名单模式（true=只回复白名单，false=回复除黑名单外的所有）
+  whitelist_mode: false

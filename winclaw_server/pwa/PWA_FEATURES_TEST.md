@@ -11,25 +11,25 @@
 
 ### 前端文件
 
-1. **`winclaw_server/pwa/src/utils/speech.ts`**
+1. **`weclaw_server/pwa/src/utils/speech.ts`**
    - 语音识别工具类
    - 封装 Web Speech API
    - 提供开始/停止录音、错误处理等功能
 
-2. **`winclaw_server/pwa/src/components/AttachmentPreview.vue`**
+2. **`weclaw_server/pwa/src/components/AttachmentPreview.vue`**
    - 附件预览组件
    - 显示已上传文件的缩略图、文件名、大小
    - 支持删除单个文件或清空所有附件
 
 ### 修改的文件
 
-1. **`winclaw_server/pwa/src/views/Chat.vue`**
+1. **`weclaw_server/pwa/src/views/Chat.vue`**
    - 实现文件选择和上传功能
    - 集成附件预览面板
    - 实现语音输入 UI 交互
    - 添加录音状态动画
 
-2. **`winclaw_server/pwa/src/stores/chat.ts`**
+2. **`weclaw_server/pwa/src/stores/chat.ts`**
    - 修改 `sendMessage` 方法支持发送带附件的消息
 
 ## 功能使用说明

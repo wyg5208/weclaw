@@ -6,7 +6,7 @@ Write-Host "WinClaw Nginx 配置修复工具" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
-$sourceConf = "d:\python_projects\winclaw_server\deployment\nginx\nginx.conf"
+$sourceConf = "d:\python_projects\weclaw_server\deployment\nginx\nginx.conf"
 $targetConf = "d:\nginx\conf\nginx.conf"
 
 # 检查源文件是否存在

@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-3xl font-bold text-cyan-400 mb-6">统计分析</h1>
+    
+    <!-- 概览卡片 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="stat-card cyber-card rounded-xl p-6">
+            <p class="text-gray-400 text-sm mb-1">总用户数</p>
+            <p id="total-users-stat" class="text-3xl font-bold text-cyan-400">-</p>
+        </div>
+        <div class="stat-card cyber-card rounded-xl p-6" style="border-left-color: var(--accent-purple);">
+            <p class="text-gray-400 text-sm mb-1">已绑定用户</p>
+            <p id="bound-users-stat" class="text-3xl font-bold text-purple-400">-</p>
+        </div>
+        <div class="stat-card cyber-card rounded-xl p-6" style="border-left-color: #10b981;">
+            <p class="text-gray-400 text-sm mb-1">绑定率</p>
+            <p id="binding-rate-stat" class="text-3xl font-bold text-green-400">-</p>
+        </div>
+    </div>
+    
+    <!-- 图表区域 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- 用户增长趋势 -->
+        <div class="cyber-card rounded-xl p-6">
+            <h2 class="text-xl font-semibold text-cyan-400 mb-4">最近 7 天用户增长</h2>
+            <canvas id="user-growth-chart"></canvas>
+        </div>
+        
+        <!-- 设备绑定趋势 -->
+        <div class="cyber-card rounded-xl p-6">
+            <h2 class="text-xl font-semibold text-purple-400 mb-4">最近 7 天设备绑定</h2>
+            <canvas id="device-growth-chart"></canvas>
+        </div>
+    </div>
+    
+    <!-- 用户分布饼图 -->
+    <div class="cyber-card rounded-xl p-6">
+        <h2 class="text-xl font-semibold text-pink-400 mb-4">用户状态分布</h2>
+        <div class="h-64 flex items-center justify-center">
+            <canvas id="user-distribution-chart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const currentToken = localStorage.getItem('admin_token');
+if (!currentToken) window.location.href = '/admin/login';
+
+let userGrowthChart, deviceGrowthChart, distributionChart;
+
+async function loadStatistics() {
+    try {
+        const response = await fetch('/admin/statistics/overview', {
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (!response.ok) throw new Error('加载失败');
+        const data = await response.json();
+        
+        // 更新概览数据
+        document.getElementById('total-users-stat').textContent = data.total_users || 0;
+        document.getElementById('bound-users-stat').textContent = data.bound_users || 0;
+        document.getElementById('binding-rate-stat').textContent = `${data.binding_rate || 0}%`;
+        
+        // 渲染图表
+        renderUserGrowthChart(data.user_growth);
+        renderDeviceGrowthChart(data.device_growth);
+        renderDistributionChart(data.bound_users, data.unbound_users);
+        
+    } catch (err) {
+        console.error('加载统计数据失败:', err);
+    }
+}
+
+function renderUserGrowthChart(growthData) {
+    const ctx = document.getElementById('user-growth-chart').getContext('2d');
+    
+    if (userGrowthChart) userGrowthChart.destroy();
+    
+    userGrowthChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: growthData.map(d => d.date.slice(5)), // 只显示 MM-DD
+            datasets: [{
+                label: '新增用户数',
+                data: growthData.map(d => d.count),
+                borderColor: '#06b6d4',
+                backgroundColor: 'rgba(6, 182, 212, 0.1)',
+                tension: 0.4,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    labels: { color: '#f1f5f9' }
+                }
+            },
+            scales: {
+                y: {
+                    ticks: { color: '#94a3b8' },
+                    grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                },
+                x: {
+                    ticks: { color: '#94a3b8' },
+                    grid: { display: false }
+                }
+            }
+        }
+    });
+}
+
+function renderDeviceGrowthChart(growthData) {
+    const ctx = document.getElementById('device-growth-chart').getContext('2d');
+    
+    if (deviceGrowthChart) deviceGrowthChart.destroy();
+    
+    deviceGrowthChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: growthData.map(d => d.date.slice(5)),
+            datasets: [{
+                label: '新增绑定数',
+                data: growthData.map(d => d.count),
+                backgroundColor: 'rgba(139, 92, 246, 0.7)',
+                borderColor: '#8b5cf6',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    labels: { color: '#f1f5f9' }
+                }
+            },
+            scales: {
+                y: {
+                    ticks: { color: '#94a3b8' },
+                    grid: { color: 'rgba(148, 163, 184, 0.1)' }
+                },
+                x: {
+                    ticks: { color: '#94a3b8' },
+                    grid: { display: false }
+                }
+            }
+        }
+    });
+}
+
+function renderDistributionChart(bound, unbound) {
+    const ctx = document.getElementById('user-distribution-chart').getContext('2d');
+    
+    if (distributionChart) distributionChart.destroy();
+    
+    distributionChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['已绑定', '未绑定'],
+            datasets: [{
+                data: [bound, unbound],
+                backgroundColor: [
+                    'rgba(6, 182, 212, 0.7)',
+                    'rgba(236, 72, 153, 0.7)'
+                ],
+                borderColor: [
+                    '#06b6d4',
+                    '#ec4899'
+                ],
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: { color: '#f1f5f9' }
+                }
+            }
+        }
+    });
+}
+
+loadStatistics();
+</script>
+{% endblock %}

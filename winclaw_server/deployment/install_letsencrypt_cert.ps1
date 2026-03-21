@@ -156,7 +156,7 @@ $response = Read-Host "  是否现在启用 HTTPS 重定向？(y/n)"
 if ($response -eq 'y' -or $response -eq 'Y') {
     Write-Host "`n  正在更新 Nginx 配置..." -ForegroundColor Cyan
     
-    $nginxConfigPath = "D:\python_projects\winclaw_server\deployment\nginx\winclaw.conf"
+    $nginxConfigPath = "D:\python_projects\weclaw_server\deployment\nginx\winclaw.conf"
     if (Test-Path $nginxConfigPath) {
         $config = Get-Content $nginxConfigPath -Raw
         

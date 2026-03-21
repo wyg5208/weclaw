@@ -22,7 +22,7 @@
 以**管理员身份**运行 PowerShell，执行：
 
 ```powershell
-cd D:\python_projects\winclaw_server\deployment
+cd D:\python_projects\weclaw_server\deployment
 .\quick_install_cert.ps1
 ```
 

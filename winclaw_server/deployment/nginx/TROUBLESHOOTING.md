@@ -33,7 +33,7 @@
 
 ### 第一步：运行自动化脚本
 ```powershell
-d:\python_projects\winclaw_server\deployment\nginx\full_cache_clean.ps1
+d:\python_projects\weclaw_server\deployment\nginx\full_cache_clean.ps1
 ```
 
 这个脚本会：

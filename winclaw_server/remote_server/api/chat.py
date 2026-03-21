@@ -120,40 +120,9 @@ async def send_message(
     
     # 通知 WinClaw 更新 PWA 状态
     await send_pwa_status_to_all_winclaws()
-        
-    # 转发消息到 WinClaw 桌面端
-    bridge_manager = get_bridge_manager()
-    if bridge_manager:
-        # 使用 message_id 作为 request_id，便于 PWA 端过滤响应
-        request_id = message_id
-            
-        # 注册 PWA 请求，以便响应能正确路由
-        bridge_manager.register_pwa_request(request_id, user.user_id, session_id)
-            
-        # 构建转发消息
-        request_msg = {
-            "type": "chat",
-            "request_id": request_id,
-            "payload": {
-                "content": request.message,
-                "attachments": attachments,
-                "options": request.options,
-                "user_id": user.user_id,
-                "pwa_session_id": session_id  # 用于响应路由
-            }
-        }
-            
-        # 发送到用户的 WinClaw 连接
-        try:
-            sent_to = await bridge_manager.send_to_user_winclaws(user.user_id, request_msg)
-            if sent_to:
-                logger.info(f"消息已转发到 WinClaw: message_id={message_id[:8]}, request={request_id[:8]}, sessions={len(sent_to)}")
-            else:
-                logger.warning(f"没有可用的 WinClaw 连接，消息无法转发：user={user.user_id}")
-        except Exception as e:
-            logger.error(f"转发消息到 WinClaw 失败：{e}")
-    else:
-        logger.warning("Bridge Manager 未初始化，消息无法转发")
+    
+    # [建议B] 消息存入 pending 即可返回，真正的 WinClaw 发送在 /stream SSE 端点中进行
+    # 不在此处提前发送，避免消息被发送两次导致 WinClaw 处理两次的 Bug
         
     # 更新会话缓存（用于 PWA 历史会话列表）
     _update_session_cache(user.user_id, session_id)

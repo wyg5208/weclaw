@@ -36,7 +36,7 @@ Since Nginx is running on port 80, DNS validation is the easiest method.
 
 1. Run the DNS application script:
    ```powershell
-   cd D:\python_projects\winclaw_server\deployment
+   cd D:\python_projects\weclaw_server\deployment
    .\apply_dns_cert.ps1
    ```
 

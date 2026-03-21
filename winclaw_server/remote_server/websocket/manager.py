@@ -213,15 +213,27 @@ class ConnectionManager:
     async def _send_to_connection(self, conn_id: str, message: dict) -> bool:
         """向指定连接发送消息"""
         if conn_id not in self._connections:
+            # logger.debug(f"发送失败：连接不存在 conn_id={conn_id}")  # 调试用
             return False
         
         conn_info = self._connections[conn_id]
+        
+        # 检查 WebSocket 连接状态
+        try:
+            ws_state = conn_info.websocket.client_state
+            if ws_state.name != 'CONNECTED':
+                logger.warning(f"发送前检测到连接异常: user={conn_info.user_id[:8]}, state={ws_state.name}")
+                await self._disconnect_user(conn_id, reason=f"连接状态异常: {ws_state.name}")
+                return False
+        except Exception as e:
+            logger.warning(f"检查连接状态失败: {e}")
+        
         try:
             await conn_info.websocket.send_json(message)
             return True
         except Exception as e:
-            logger.warning(f"发送消息失败: {e}")
-            await self._disconnect_user(conn_id, reason="发送失败")
+            logger.warning(f"发送消息失败: user={conn_info.user_id[:8]}, error={e}")
+            await self._disconnect_user(conn_id, reason=f"发送失败: {e}")
             return False
     
     async def broadcast(self, message: dict, exclude_users: Optional[Set[str]] = None):

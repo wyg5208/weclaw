@@ -21,6 +21,7 @@ export interface Message {
     model?: string
     attachments?: Attachment[]
     tool_calls?: ToolCall[]
+    isQueueNotice?: boolean
   }
 }
 
@@ -125,6 +126,23 @@ export const useChatStore = defineStore('chat', () => {
               lastMessage.metadata.tool_calls.push(data.payload as ToolCall)
             }
           }
+        } else if (data.type === 'queued') {
+          if (isMyRequest) {
+            // AI 正忙，请求已排队 — 在最后一条 assistant 消息或新建一条提示
+            const queuedHint = (payload?.message as string) || '⏳ 请求已排队，等待处理...'
+            // 如果最后一条消息是用户消息，插入一条系统提示
+            const last = messages.value[messages.value.length - 1]
+            if (!last || last.role === 'user') {
+              messages.value.push({
+                message_id: generateUUID(),
+                session_id: sessionId,
+                role: 'assistant',
+                content: `⏳ ${queuedHint}`,
+                created_at: new Date().toISOString(),
+                metadata: { isQueueNotice: true }
+              })
+            }
+          }
         }
       },
       onStatus: (data) => {
@@ -177,20 +195,59 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push(userMessage)
 
     try {
+      // ✅ 确保 WebSocket 已连接（优先使用 WebSocket 发送消息）
+      if (!ws || !ws.isConnected.value) {
+        initWebSocket(currentSessionId.value || `remote_${Date.now()}`)
+        // 等待 WebSocket 连接建立
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+      
+      // ✅ 优先使用 WebSocket 发送消息（实时性更好）
+      if (ws && ws.isConnected.value) {
+        // 通过 WebSocket 发送消息
+        // ✅ 生成 request_id 并发送给服务器，确保响应能正确路由回来
+        const requestId = generateUUID()
+        pendingMessageIds.value.add(requestId)
+        
+        ws.send('message', {
+          request_id: requestId,  // ✅ 关键：发送 request_id 给服务器
+          content,
+          attachments: attachments?.map(a => ({
+            attachment_id: a.attachment_id,
+            type: a.type,
+            data: a.url || '',
+            filename: a.filename,
+            mime_type: a.mime_type
+          }))
+        })
+        
+        // 更新或创建会话
+        if (!currentSession.value) {
+          currentSession.value = {
+            session_id: `remote_${Date.now()}`,
+            created_at: new Date().toISOString(),
+            last_active: new Date().toISOString(),
+            status: 'active',
+            message_count: 1
+          }
+        }
+        
+        return true
+      }
+      
+      // ✅ 降级：使用 HTTP API 发送消息
       const response = await chatApi.sendMessage({
         message: content,
         session_id: currentSessionId.value || undefined,
         attachments: attachments?.map(a => ({
-          attachment_id: a.attachment_id,  // 新增：传递 attachment_id
+          attachment_id: a.attachment_id,
           type: a.type,
-          data: a.url || '', // 使用服务器返回的 URL
+          data: a.url || '',
           filename: a.filename,
           mime_type: a.mime_type
         }))
       })
 
-      // ✅ API 直接返回数据，但不通过 HTTP stream 接收响应
-      // 响应会通过 WebSocket 异步推送（避免重复）
       const data = response.data as unknown as {
         message_id: string
         session_id: string
@@ -212,13 +269,8 @@ export const useChatStore = defineStore('chat', () => {
           }
         }
         
-        // ✅ 确保 WebSocket 已连接（用于接收响应）
-        if (!ws || !ws.isConnected.value) {
-          initWebSocket(data.session_id)
-        }
-
-        // ❓ 不再通过 HTTP stream 接收响应（通过 WebSocket 接收）
-        // await fetchStreamResponse(data.message_id, data.session_id)
+        // ✅ HTTP 路径需要通过 SSE 接收响应
+        await fetchStreamResponse(data.message_id, data.session_id)
         
         return true
       } else {

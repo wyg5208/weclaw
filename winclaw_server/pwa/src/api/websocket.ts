@@ -45,6 +45,8 @@ export function useWebSocket(options: WebSocketOptions = {}) {
   let reconnectAttempts = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let pingTimer: ReturnType<typeof setInterval> | null = null
+  let lastPongTime = 0  // 上次收到 pong 的时间
+  let pongCheckTimer: ReturnType<typeof setInterval> | null = null
 
   // 获取 WebSocket URL
   function getWebSocketUrl(): string {
@@ -118,7 +120,8 @@ export function useWebSocket(options: WebSocketOptions = {}) {
             onStatus?.(data)
             break
           case 'pong':
-            // 心跳响应
+            // 心跳响应 - 更新最后 pong 时间
+            lastPongTime = Date.now()
             break
           // ✅ 新增：处理 WinClaw 状态变化（Phase 1.3）
           case 'winclaw_status':
@@ -163,9 +166,26 @@ export function useWebSocket(options: WebSocketOptions = {}) {
   // 开始心跳
   function startPing() {
     stopPing()
+    lastPongTime = Date.now()
+    
+    // 每 15 秒发送一次心跳
     pingTimer = setInterval(() => {
-      send('ping')
-    }, 30000) // 30秒
+      if (ws?.readyState === WebSocket.OPEN) {
+        send('ping')
+      }
+    }, 15000) // 15秒
+    
+    // 检查 pong 响应超时（如果 45 秒没有收到 pong，重连）
+    pongCheckTimer = setInterval(() => {
+      const elapsed = Date.now() - lastPongTime
+      if (elapsed > 45000) {
+        console.warn(`WebSocket 心跳超时 (${elapsed}ms)，尝试重连...`)
+        // 强制重连
+        if (ws) {
+          ws.close(4000, 'Heartbeat timeout')
+        }
+      }
+    }, 15000)
   }
 
   // 停止心跳
@@ -173,6 +193,10 @@ export function useWebSocket(options: WebSocketOptions = {}) {
     if (pingTimer) {
       clearInterval(pingTimer)
       pingTimer = null
+    }
+    if (pongCheckTimer) {
+      clearInterval(pongCheckTimer)
+      pongCheckTimer = null
     }
   }
 

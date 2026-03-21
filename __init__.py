@@ -21,5 +21,8 @@ __version__ = "3.0.0-alpha"
 __author__ = "WinClaw Research Team"
 __all__ = ['__version__', '__author__']
 
-# 核心模块导出
-from .nct_modules import *
+# 核心模块导出（可选，模块不存在时跳过）
+try:
+    from .nct_modules import *
+except ImportError:
+    pass

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-3xl font-bold text-cyan-400 mb-6">日志中心</h1>
+    
+    <!-- 筛选器 -->
+    <div class="cyber-card rounded-xl p-6">
+        <div class="flex flex-wrap gap-4">
+            <select id="log-type" class="cyber-input px-4 py-2 rounded-lg">
+                <option value="remote">服务器日志</option>
+                <option value="error">错误日志</option>
+            </select>
+            <select id="log-level" class="cyber-input px-4 py-2 rounded-lg">
+                <option value="">所有级别</option>
+                <option value="INFO">INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+                <option value="CRITICAL">CRITICAL</option>
+            </select>
+            <input type="text" id="search-log" placeholder="搜索关键词..." class="cyber-input px-4 py-2 rounded-lg flex-1">
+            <button onclick="loadLogs()" class="cyber-button px-6 py-2 rounded-lg text-white">刷新</button>
+            <button onclick="downloadLogs()" class="px-6 py-2 cyber-card rounded-lg hover:bg-cyan-500/20">下载日志</button>
+        </div>
+    </div>
+    
+    <!-- 日志列表 -->
+    <div class="cyber-card rounded-xl p-6">
+        <div class="font-mono text-sm space-y-2 max-h-[600px] overflow-y-auto bg-slate-900/50 p-4 rounded-lg" id="logs-container">
+            <div class="text-gray-500">加载中...</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const currentToken = localStorage.getItem('admin_token');
+if (!currentToken) window.location.href = '/admin/login';
+
+async function loadLogs() {
+    try {
+        const logType = document.getElementById('log-type').value;
+        const level = document.getElementById('log-level').value;
+        const search = document.getElementById('search-log').value;
+        
+        let url = `/admin/logs/list?log_type=${logType}&lines=200`;
+        if (level) url += `&level=${level}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (!response.ok) throw new Error('加载失败');
+        const data = await response.json();
+        
+        const container = document.getElementById('logs-container');
+        container.innerHTML = data.items.map(log => `
+            <div class="border-l-2 ${getLevelColor(log.level)} pl-3 py-1">
+                <span class="text-gray-500 text-xs">${log.timestamp || ''}</span>
+                <span class="${getLevelBadge(log.level)} ml-2">${log.level}</span>
+                <div class="mt-1 text-gray-300">${log.message}</div>
+            </div>
+        `).join('') || '<div class="text-gray-500">暂无日志</div>';
+        
+    } catch (err) {
+        console.error('加载日志失败:', err);
+    }
+}
+
+function getLevelColor(level) {
+    const colors = {
+        'INFO': 'border-blue-500',
+        'WARNING': 'border-yellow-500',
+        'ERROR': 'border-red-500',
+        'CRITICAL': 'border-pink-500'
+    };
+    return colors[level] || 'border-gray-500';
+}
+
+function getLevelBadge(level) {
+    const badges = {
+        'INFO': 'bg-blue-500/20 text-blue-400',
+        'WARNING': 'bg-yellow-500/20 text-yellow-400',
+        'ERROR': 'bg-red-500/20 text-red-400',
+        'CRITICAL': 'bg-pink-500/20 text-pink-400'
+    };
+    return `px-2 py-0.5 rounded text-xs ${badges[level] || 'bg-gray-500/20 text-gray-400'}`;
+}
+
+async function downloadLogs() {
+    const logType = document.getElementById('log-type').value;
+    window.location.href = `/admin/logs/download?log_type=${logType}`;
+}
+
+// 自动刷新日志（每 30 秒）
+setInterval(loadLogs, 30000);
+loadLogs();
+</script>
+{% endblock %}

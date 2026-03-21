@@ -15,7 +15,7 @@ $NGINX_PATH = "D:\nginx"
 $WIN_ACME_URL = "https://github.com/win-acme/win-acme/releases/download/v2.2.8.1635/win-acme.v2.2.8.1635.x64.pluggable.zip"
 $WIN_ACME_DIR = "D:\tools\win-acme"
 $TEMP_DIR = "D:\temp"
-$NGINX_CONFIG_PATH = "D:\python_projects\winclaw_server\deployment\nginx\winclaw.conf"
+$NGINX_CONFIG_PATH = "D:\python_projects\weclaw_server\deployment\nginx\winclaw.conf"
 
 # Phase 1: Prepare Environment
 Write-Host "[Phase 1/5] Preparing environment..." -ForegroundColor Yellow

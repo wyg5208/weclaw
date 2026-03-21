@@ -26,10 +26,10 @@
             type="password"
             name="password"
             label="密码"
-            placeholder="至少6位字符"
+            placeholder="至少 8 位字符"
             :rules="[
               { required: true, message: '请输入密码' },
-              { validator: (val: string) => val.length >= 6, message: '密码至少6位' }
+              { validator: (val: string) => val.length >= 8, message: '密码至少 8 位' }
             ]"
             clearable
           />

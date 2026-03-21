@@ -147,6 +147,7 @@ async def handle_message(
             session_id=session_id,
             content=payload.get("content", ""),
             attachments=payload.get("attachments", []),
+            request_id=payload.get("request_id"),  # ✅ 接收客户端传来的 request_id
             connection_manager=connection_manager,
             winclaw_bridge=winclaw_bridge
         )
@@ -177,7 +178,8 @@ async def handle_chat_message(
     content: str,
     attachments: list,
     connection_manager,
-    winclaw_bridge  # 已废弃，使用 bridge_handler 代替
+    winclaw_bridge,  # 已废弃，使用 bridge_handler 代替
+    request_id: str = None  # ✅ 新增：客户端传来的 request_id
 ):
     """处理聊天消息 - 转发到用户绑定的 WinClaw PC 端"""
     from .bridge_handler import get_bridge_manager
@@ -186,24 +188,19 @@ async def handle_chat_message(
     
     bridge_manager = get_bridge_manager()
     
-    # 查找用户绑定的 WinClaw 连接
+    # 查找用户绑定的 WinClaw 连接（包含设备指纹匹配）
     winclaw_conn = bridge_manager.get_user_connection(user_id)
     
     if not winclaw_conn:
         # ✅ 差异化错误检测：区分"未绑定"和"离线"
         user_manager = context.get_user_manager()
         has_bound_device = False
+        device_info = None
         
         if user_manager:
-            # 检查用户是否有已绑定的设备
-            with user_manager._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT COUNT(*) FROM device_bindings
-                    WHERE user_id = ? AND status = 'active'
-                """, (user_id,))
-                row = cursor.fetchone()
-                has_bound_device = row[0] > 0 if row else False
+            # 获取用户绑定的设备信息
+            device_info = user_manager.get_user_device(user_id)
+            has_bound_device = device_info is not None
         
         if has_bound_device:
             # ✅ Phase 2.3 + Phase 3.1: 设备已绑定但离线 - 存入离线消息队列（带国际化）
@@ -232,12 +229,18 @@ async def handle_chat_message(
             error_code = "DEVICE_OFFLINE"
             # ✅ 使用国际化翻译函数
             lang = get_user_language(user_id)
-            message = t("device_offline_msg", lang, default="您的 WinClaw PC 端当前离线，消息将在其上线后自动发送")
+            message = t("device_offline_msg", lang, default="💻 您的 WinClaw PC 端当前离线，消息将在其上线后自动发送")
+            
+            # ✅ 新增：同时通过 WebSocket 推送状态通知
+            from .bridge_handler import broadcast_winclaw_status_change
+            asyncio.create_task(
+                broadcast_winclaw_status_change(user_id, "offline")
+            )
         else:
             # 未绑定设备
             error_code = "NO_DEVICE_BOUND"
             lang = get_user_language(user_id)
-            message = t("no_device_bound_msg", lang, default="您还没有绑定 WinClaw PC 端，请在设置中完成设备绑定")
+            message = t("no_device_bound_msg", lang, default="📱 您还没有绑定 WinClaw PC 端，请在设置中完成设备绑定")
         
         await connection_manager.send_to_session(session_id, {
             "type": "error",
@@ -255,8 +258,13 @@ async def handle_chat_message(
             "payload": {}
         })
         
-        # 生成请求 ID
-        request_id = str(uuid.uuid4())
+        # 生成或使用客户端的请求 ID
+        # ✅ 关键修复：优先使用客户端传来的 request_id，确保响应能正确路由回 PWA
+        if not request_id:
+            request_id = str(uuid.uuid4())
+            # logger.debug(f"生成新的 request_id: {request_id[:8]}")  # 调试用
+        else:
+            pass  # logger.debug(f"使用客户端 request_id: {request_id[:8]}")  # 调试用
         
         # 记录这个请求对应的 PWA session，以便响应能够路由回来
         bridge_manager.register_pwa_request(request_id, user_id, session_id)
@@ -273,7 +281,7 @@ async def handle_chat_message(
             }
         })
         
-        logger.info(f"消息已转发到 WinClaw: user={user_id[:8]}, request={request_id[:8]}")
+        # logger.info(f"消息已转发到 WinClaw: user={user_id[:8]}, request={request_id[:8]}")  # 调试用
         
         # 响应会通过 bridge_handler 异步转发回 PWA
         # 不需要在这里等待

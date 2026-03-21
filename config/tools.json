@@ -253,6 +253,44 @@
       },
       "actions": ["record_and_transcribe", "record_audio", "transcribe_file", "list_devices"]
     },
+    "wechat": {
+      "enabled": true,
+      "module": "src.tools.wechat",
+      "class": "WeChatTool",
+      "display": {
+        "name": "微信消息",
+        "emoji": "💬",
+        "description": "管理电脑端微信消息，支持查看、回复、切换聊天和智能客服",
+        "category": "communication"
+      },
+      "config": {
+        "config_path": "config/wechat_config.yaml",
+        "ocr_engine": "glm-4.5v",
+        "chat_model": "glm-4-flash",
+        "default_check_interval": 300,
+        "knowledge_base_path": "data/wechat_knowledge.db"
+      },
+      "security": {
+        "risk_level": "medium",
+        "require_confirmation": false,
+        "permissions": ["clipboard", "screenshot", "window_control"]
+      },
+      "dependencies": {
+        "input_sources": ["cron", "knowledge_rag", "ocr", "clipboard"],
+        "output_for": ["doc_generator", "cron"],
+        "standalone": true
+      },
+      "actions": [
+        "view_messages",
+        "send_message",
+        "switch_chat",
+        "search_messages",
+        "enable_auto_reply",
+        "get_chat_list",
+        "customer_service",
+        "add_to_knowledge"
+      ]
+    },
     "voice_output": {
       "enabled": true,
       "module": "src.tools.voice_output",

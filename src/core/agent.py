@@ -280,6 +280,10 @@ class Agent:
         
         # 任务执行状态跟踪器 - 用于智能锚定消息
         self._execution_tracker = ExecutionTracker()
+
+        # 请求序列化锁：防止多路并发请求（本地+远程PWA）同时修改 session 历史
+        # asyncio.Lock 必须在事件循环已启动后才能创建，使用懒加载
+        self._chat_lock: asyncio.Lock | None = None
         
         # Phase 6: 意识系统集成（已禁用）
         # 保持 CONSCIOUSNESS_ENABLED = False，不加载意识系统
@@ -292,6 +296,13 @@ class Agent:
     def messages(self) -> list[dict[str, Any]]:
         """兼容旧接口：返回当前会话的消息列表。"""
         return self.session_manager.current_session.messages
+
+    @property
+    def chat_lock(self) -> asyncio.Lock:
+        """懒加载聊天序列化锁（首次访问时在当前事件循环中创建）。"""
+        if self._chat_lock is None:
+            self._chat_lock = asyncio.Lock()
+        return self._chat_lock
     
     # 【优化】懒加载重型组件的属性方法
     @property
@@ -496,12 +507,20 @@ class Agent:
     async def chat(self, user_input: str) -> AgentResponse:
         """处理用户输入，执行 ReAct 循环，返回最终回复。
 
+        通过 chat_lock 序列化并发请求（本地 + 远程 PWA），
+        防止多路请求同时写入 session 历史导致数据污染。
+
         Args:
             user_input: 用户的输入文本
 
         Returns:
             AgentResponse 包含最终回复、步骤详情、token 用量
         """
+        async with self.chat_lock:
+            return await self._chat_impl(user_input)
+
+    async def _chat_impl(self, user_input: str) -> AgentResponse:
+        """chat() 的内部实现（已持有 chat_lock）。"""
         # Phase 6: 确保意识系统已启动（懒启动）
         self._ensure_consciousness_started()
         
@@ -1049,6 +1068,10 @@ class Agent:
     async def chat_stream(self, user_input: str) -> AsyncGenerator[str, None]:
         """流式处理用户输入，yield 文本片段。
 
+        通过 chat_lock 序列化并发请求（本地 + 远程 PWA）：
+        锁在生成器整个生命周期内保持持有，确保 session 历史不被
+        并发请求污染。后续请求会等待当前请求完成后再开始。
+
         与 chat() 使用相同的 ReAct 循环逻辑，但对最终文本回复进行流式输出：
         - 工具调用步骤：内部收集完整 tool_calls 后执行，不 yield
         - 文本回复：逐 chunk yield 给调用方
@@ -1060,6 +1083,16 @@ class Agent:
         Yields:
             str: 模型生成的文本片段
         """
+        # 等待获取锁（串行化所有请求：本地 UI + 远程 PWA）
+        await self.chat_lock.acquire()
+        try:
+            async for chunk in self._chat_stream_impl(user_input):
+                yield chunk
+        finally:
+            self.chat_lock.release()
+
+    async def _chat_stream_impl(self, user_input: str) -> AsyncGenerator[str, None]:
+        """chat_stream() 的内部实现（已持有 chat_lock）。"""
         session = self.session_manager.current_session
         session_id = session.id
         total_tokens = 0

@@ -456,7 +456,11 @@ class RemoteBridgeClient:
             logger.warning(f"未知消息类型: {msg_type}")
     
     async def _handle_chat(self, request_id: str, payload: dict):
-        """处理聊天请求"""
+        """处理聊天请求。
+        
+        若 Agent 正在处理其他请求（本地或其他 PWA），
+        先向发起方发送"排队等待"通知，待 Agent 空闲后再处理。
+        """
         content = payload.get("content", "")
         attachments = payload.get("attachments", [])
         options = payload.get("options", {})
@@ -466,6 +470,21 @@ class RemoteBridgeClient:
         if not content:
             await self._send_error("EMPTY_MESSAGE", "消息内容为空", request_id)
             return
+        
+        # 如果 Agent 已持有锁（正在处理其他请求），先通知 PWA 排队等待
+        agent = self.agent
+        if hasattr(agent, '_chat_lock') and agent._chat_lock is not None and agent._chat_lock.locked():
+            logger.info(f"Agent 正忙，请求排队: request={request_id[:8]}, user={user_id[:8]}")
+            try:
+                await self._send_response(request_id, {
+                    "type": "queued",
+                    "payload": {
+                        "message": "当前 AI 正在处理其他请求，您的请求已排队，请稍等...",
+                        "request_id": request_id,
+                    }
+                })
+            except Exception as e:
+                logger.debug(f"发送排队通知失败: {e}")
         
         # 创建流式处理任务
         stream_task = asyncio.create_task(
@@ -531,6 +550,13 @@ class RemoteBridgeClient:
         except Exception as e:
             logger.error(f"重连通知失败：{e}")
     
+    def _get_username_for_user(self, user_id: str) -> str:
+        """根据 user_id 查找用户名。"""
+        for conn in self._stats.pwa_connections:
+            if conn.user_id == user_id and conn.username:
+                return conn.username
+        return user_id[:8] if user_id else "远程用户"
+
     async def _stream_chat_response(
         self,
         request_id: str,
@@ -558,6 +584,18 @@ class RemoteBridgeClient:
             logger.info(f"处理远程消息: user={user_id}, attachments={len(attachments)}, request={request_id[:8]}")
             if attachments:
                 logger.info(f"附件列表: {[a.get('filename', 'unknown') for a in attachments]}")
+            
+            # 通知 GUI：远程请求开始
+            if self.event_bus:
+                username = self._get_username_for_user(user_id)
+                try:
+                    await self.event_bus.emit("remote_request_started", {
+                        "user_id": user_id,
+                        "username": username,
+                        "request_id": request_id,
+                    })
+                except Exception as _e:
+                    logger.debug(f"发射 remote_request_started 事件失败: {_e}")
             
             # 调用 Agent 的流式处理
             full_response = ""
@@ -597,6 +635,16 @@ class RemoteBridgeClient:
         except Exception as e:
             logger.error(f"聊天处理失败: {e}", exc_info=True)
             await self._send_error("CHAT_ERROR", str(e), request_id)
+        finally:
+            # 通知 GUI：远程请求结束
+            if self.event_bus:
+                try:
+                    await self.event_bus.emit("remote_request_ended", {
+                        "request_id": request_id,
+                        "user_id": user_id,
+                    })
+                except Exception as _e:
+                    logger.debug(f"发射 remote_request_ended 事件失败: {_e}")
     
     def _build_remote_attachment_context(
         self, 

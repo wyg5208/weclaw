@@ -28,6 +28,8 @@ class DeviceInfo:
     bound_at: str
     last_connected: Optional[str]
     status: str
+    access_token: Optional[str] = None  # ✅ 新增：JWT access token
+    refresh_token: Optional[str] = None  # ✅ 新增：JWT refresh token
 
 
 class DeviceBindClient:
@@ -62,7 +64,7 @@ class DeviceBindClient:
             device_name: 设备名称（可选）
             
         Returns:
-            绑定成功返回设备信息，失败返回 None
+            绑定成功返回设备信息（包含 JWT Token），失败返回 None
         """
         if not AIOHTTP_AVAILABLE:
             logger.error("aiohttp 库未安装")
@@ -89,12 +91,29 @@ class DeviceBindClient:
                         data = await response.json()
                         if data.get("success"):
                             logger.info(f"设备绑定成功：{data.get('device_id', '')[:16]}...")
+                            
+                            # ✅ 保存返回的 JWT Token
+                            access_token = data.get("access_token")
+                            refresh_token = data.get("refresh_token")
+                            
+                            if access_token:
+                                # 保存到安全存储
+                                from ..ui.keystore import save_key
+                                save_key("WECLAW_ACCESS_TOKEN", access_token)
+                                logger.info("已保存 access token")
+                            
+                            if refresh_token:
+                                save_key("WECLAW_REFRESH_TOKEN", refresh_token)
+                                logger.info("已保存 refresh token")
+                            
                             return DeviceInfo(
                                 device_id=data.get("device_id", ""),
                                 device_name=data.get("device_name", ""),
                                 bound_at="",
                                 last_connected=None,
-                                status="active"
+                                status="active",
+                                access_token=access_token,
+                                refresh_token=refresh_token
                             )
                         else:
                             logger.error(f"绑定失败：{data.get('message', '未知错误')}")

@@ -152,9 +152,18 @@ class VoiceOutputTool(BaseTool):
                 engine.setProperty("voice", voices[voice_index].id)
 
             # 在线程池中执行阻塞的朗读操作
+            # 注意：pyttsx3 在 Windows 上有已知问题，需要先 stop() 清理状态
+            # 否则第二次调用 runAndWait() 可能立即返回而不播放
+            def _do_speak():
+                try:
+                    engine.stop()  # 清理之前的播放状态（关键修复）
+                except Exception:
+                    pass  # 忽略 stop 失败
+                engine.say(text)
+                engine.runAndWait()
+
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: engine.say(text))
-            await loop.run_in_executor(None, engine.runAndWait)
+            await loop.run_in_executor(None, _do_speak)
 
             return ToolResult(
                 status=ToolResultStatus.SUCCESS,
@@ -192,9 +201,17 @@ class VoiceOutputTool(BaseTool):
                 engine.setProperty("voice", voices[voice_index].id)
 
             # 保存到文件
+            # 注意：与 speak 相同，需要先 stop() 清理引擎状态
+            def _do_save():
+                try:
+                    engine.stop()  # 清理之前的状态
+                except Exception:
+                    pass
+                engine.save_to_file(text, str(path))
+                engine.runAndWait()
+
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: engine.save_to_file(text, str(path)))
-            await loop.run_in_executor(None, engine.runAndWait)
+            await loop.run_in_executor(None, _do_save)
 
             file_size_kb = path.stat().st_size / 1024
 

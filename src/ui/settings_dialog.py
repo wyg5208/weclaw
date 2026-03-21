@@ -105,6 +105,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._create_apikey_tab(), tr("API 密钥"))
         tabs.addTab(self._create_general_tab(), tr("通用"))
+        tabs.addTab(self._create_remote_tab(), tr("远程绑定"))
         tabs.addTab(self._create_mcp_tab(), "MCP")
         tabs.addTab(self._create_update_tab(), tr("更新"))
         layout.addWidget(tabs)
@@ -389,29 +390,6 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(hotkey_group)
 
-        # ---------- 远程绑定 ----------
-        remote_group = QGroupBox(tr("远程绑定"))
-        remote_layout = QVBoxLayout(remote_group)
-
-        self._device_status_label = QLabel("未绑定设备")
-        self._device_status_label.setStyleSheet("font-size: 13px; color: gray;")
-        remote_layout.addWidget(self._device_status_label)
-
-        device_btn_layout = QHBoxLayout()
-
-        self._bind_device_btn = QPushButton("绑定设备")
-        self._bind_device_btn.clicked.connect(self._on_bind_device)
-        device_btn_layout.addWidget(self._bind_device_btn)
-
-        self._unbind_device_btn = QPushButton("解绑设备")
-        self._unbind_device_btn.setEnabled(False)
-        self._unbind_device_btn.clicked.connect(self._on_unbind_device)
-        device_btn_layout.addWidget(self._unbind_device_btn)
-
-        remote_layout.addLayout(device_btn_layout)
-
-        layout.addWidget(remote_group)
-
         layout.addStretch()
         return widget
 
@@ -464,6 +442,59 @@ class SettingsDialog(QDialog):
         if model_id:
             self.whisper_model_changed.emit(model_id)
             logger.info("Whisper 模型已切换为：%s", model_id)
+    
+    # ----------------------------------------------------------------
+    # 远程绑定选项卡
+    # ----------------------------------------------------------------
+    
+    def _create_remote_tab(self) -> QWidget:
+        """创建远程绑定选项卡。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # 远程绑定卡片
+        remote_group = QGroupBox(tr("远程绑定"))
+        remote_layout = QVBoxLayout(remote_group)
+
+        self._device_status_label = QLabel("未绑定设备")
+        self._device_status_label.setStyleSheet("font-size: 13px; color: gray;")
+        remote_layout.addWidget(self._device_status_label)
+
+        device_btn_layout = QHBoxLayout()
+
+        self._bind_device_btn = QPushButton("绑定设备")
+        self._bind_device_btn.clicked.connect(self._on_bind_device)
+        device_btn_layout.addWidget(self._bind_device_btn)
+
+        self._unbind_device_btn = QPushButton("解绑设备")
+        self._unbind_device_btn.setEnabled(False)
+        self._unbind_device_btn.clicked.connect(self._on_unbind_device)
+        device_btn_layout.addWidget(self._unbind_device_btn)
+
+        remote_layout.addLayout(device_btn_layout)
+
+        layout.addWidget(remote_group)
+        
+        # 说明信息
+        info_group = QGroupBox("使用说明")
+        info_layout = QVBoxLayout(info_group)
+        
+        info_text = QLabel(
+            "通过远程绑定，您可以在其他设备上访问此 AI 助手。\n\n"
+            "绑定步骤：\n"
+            "1. 访问服务器网站获取绑定 Token\n"
+            "2. 点击'绑定设备'按钮\n"
+            "3. 输入 Token 完成绑定\n\n"
+            "绑定后，您可以使用手机、平板等设备\n"
+            "通过网络远程使用 WinClaw。"
+        )
+        info_text.setWordWrap(True)
+        info_text.setStyleSheet("font-size: 12px; color: gray;")
+        info_layout.addWidget(info_text)
+        
+        layout.addWidget(info_group)
+        layout.addStretch()
+        return widget
     
     # ----------------------------------------------------------------
     # 设备绑定功能（Phase 5.3）
@@ -532,6 +563,7 @@ class SettingsDialog(QDialog):
     def _on_unbind_device(self) -> None:
         """解绑设备。"""
         from src.remote_client.device_binder import DeviceBindClient
+        from .keystore import delete_key
         import asyncio
     
         reply = QMessageBox.question(
@@ -547,18 +579,28 @@ class SettingsDialog(QDialog):
         try:
             server_url = self._get_server_url()
             binder = DeviceBindClient(server_url)
-    
+            
+            # ✅ 从存储中加载 JWT Token
+            access_token = load_key("WECLAW_ACCESS_TOKEN")
+            if access_token:
+                binder.set_token(access_token)
+
             # 异步执行解绑
             async def do_unbind():
                 return await binder.unbind_device()
-    
+
             # 在后台线程运行
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(lambda: asyncio.run(do_unbind()))
                 success = future.result(timeout=30)
-    
+
             if success:
+                # ✅ 清除保存的 Token
+                delete_key("WECLAW_ACCESS_TOKEN")
+                delete_key("WECLAW_REFRESH_TOKEN")
+                logger.info("已清除保存的 JWT Token")
+                
                 QMessageBox.information(self, "解绑成功", "设备已成功解绑")
                 self._clear_device_status()
             else:
@@ -621,11 +663,18 @@ class SettingsDialog(QDialog):
     def _load_device_status(self) -> None:
         """加载设备状态。"""
         from src.remote_client.device_binder import DeviceBindClient
+        from .keystore import load_key
         import asyncio
 
         try:
             server_url = self._get_server_url()
             binder = DeviceBindClient(server_url)
+            
+            # ✅ 从存储中加载 JWT Token
+            access_token = load_key("WECLAW_ACCESS_TOKEN")
+            if access_token:
+                binder.set_token(access_token)
+                logger.info("已加载保存的 JWT Token")
 
             # 异步执行查询
             async def do_query():

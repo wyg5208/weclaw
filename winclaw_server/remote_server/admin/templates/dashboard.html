@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-3xl font-bold text-cyan-400 mb-6">仪表盘</h1>
+    
+    <!-- 统计卡片 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div class="stat-card cyber-card rounded-xl p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-400 text-sm mb-1">总用户数</p>
+                    <p id="total-users" class="text-3xl font-bold text-cyan-400">-</p>
+                </div>
+                <div class="w-12 h-12 bg-cyan-500/20 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stat-card cyber-card rounded-xl p-6" style="border-left-color: var(--accent-purple);">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-400 text-sm mb-1">已绑定用户</p>
+                    <p id="bound-users" class="text-3xl font-bold text-purple-400">-</p>
+                </div>
+                <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stat-card cyber-card rounded-xl p-6" style="border-left-color: var(--accent-pink);">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-400 text-sm mb-1">未绑定用户</p>
+                    <p id="unbound-users" class="text-3xl font-bold text-pink-400">-</p>
+                </div>
+                <div class="w-12 h-12 bg-pink-500/20 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stat-card cyber-card rounded-xl p-6" style="border-left-color: #10b981;">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-gray-400 text-sm mb-1">今日新增</p>
+                    <p id="today-users" class="text-3xl font-bold text-green-400">-</p>
+                </div>
+                <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 绑定率进度条 -->
+    <div class="cyber-card rounded-xl p-6 mb-6">
+        <h2 class="text-xl font-semibold text-cyan-400 mb-4">用户绑定率</h2>
+        <div class="w-full bg-slate-700 rounded-full h-4 overflow-hidden">
+            <div id="binding-rate-bar" class="bg-gradient-to-r from-cyan-400 to-purple-500 h-4 rounded-full transition-all duration-500" style="width: 0%"></div>
+        </div>
+        <p id="binding-rate-text" class="text-right text-gray-400 mt-2">0%</p>
+    </div>
+    
+    <!-- 最近注册用户 -->
+    <div class="cyber-card rounded-xl p-6">
+        <h2 class="text-xl font-semibold text-cyan-400 mb-4">最近注册用户</h2>
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr>
+                        <th class="py-3 px-4">用户名</th>
+                        <th class="py-3 px-4">注册时间</th>
+                        <th class="py-3 px-4">绑定状态</th>
+                    </tr>
+                </thead>
+                <tbody id="recent-users-table">
+                    <tr><td colspan="3" class="text-center text-gray-500 py-8">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadDashboardStats() {
+    try {
+        const token = localStorage.getItem('admin_token');
+        if (!token) {
+            window.location.href = '/admin/login';
+            return;
+        }
+        
+        const response = await fetch('/admin/dashboard/stats', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        if (!response.ok) {
+            if (response.status === 401) {
+                localStorage.removeItem('admin_token');
+                window.location.href = '/admin/login';
+            }
+            return;
+        }
+        
+        const data = await response.json();
+        
+        // 更新统计数据
+        document.getElementById('total-users').textContent = data.total_users || 0;
+        document.getElementById('bound-users').textContent = data.bound_users || 0;
+        document.getElementById('unbound-users').textContent = data.unbound_users || 0;
+        document.getElementById('today-users').textContent = data.today_new_users || 0;
+        
+        // 更新绑定率进度条
+        const bindingRate = data.binding_rate || 0;
+        document.getElementById('binding-rate-bar').style.width = `${bindingRate}%`;
+        document.getElementById('binding-rate-text').textContent = `${bindingRate.toFixed(2)}%`;
+        
+    } catch (err) {
+        console.error('加载统计数据失败:', err);
+    }
+}
+
+// 页面加载时获取数据
+loadDashboardStats();
+</script>
+{% endblock %}

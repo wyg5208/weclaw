@@ -54,6 +54,9 @@ class User:
     login_attempts: int = 0
     locked_until: Optional[datetime] = None
     
+    # Token 吊销时间点（UTC）：在此时间点之前签发的 token 均视为无效
+    tokens_revoked_at: Optional[datetime] = None
+    
     def to_dict(self) -> dict:
         """转换为字典（不包含敏感信息）"""
         return {
@@ -78,7 +81,8 @@ class User:
             "device_fingerprint": self.device_fingerprint,
             "settings": self.settings.to_dict(),
             "login_attempts": self.login_attempts,
-            "locked_until": self.locked_until.isoformat() if self.locked_until else None
+            "locked_until": self.locked_until.isoformat() if self.locked_until else None,
+            "tokens_revoked_at": self.tokens_revoked_at.isoformat() if self.tokens_revoked_at else None
         }
     
     @classmethod

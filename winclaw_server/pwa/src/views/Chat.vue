@@ -18,14 +18,25 @@
         <h2>欢迎使用 WinClaw</h2>
         <p>您可以发送消息开始对话，或使用下方工具快速操作</p>
         
+        <!-- 设备未绑定提示 -->
+        <van-notice-bar
+          v-if="!isDeviceBound"
+          color="#ff5252"
+          background="#fff0f0"
+          left-icon="info-o"
+          style="margin: 16px 0;"
+        >
+          请先绑定 WinClaw PC 设备后才能开始对话
+        </van-notice-bar>
+        
         <div class="quick-actions">
-          <van-button size="small" @click="sendQuickMessage('帮我查看当前系统状态')">
+          <van-button size="small" @click="sendQuickMessage('帮我查看当前系统状态')" :disabled="!isDeviceBound">
             查看状态
           </van-button>
-          <van-button size="small" @click="sendQuickMessage('最近有什么任务需要处理吗')">
+          <van-button size="small" @click="sendQuickMessage('最近有什么任务需要处理吗')" :disabled="!isDeviceBound">
             待办任务
           </van-button>
-          <van-button size="small" @click="sendQuickMessage('帮我总结一下今天的工作')">
+          <van-button size="small" @click="sendQuickMessage('帮我总结一下今天的工作')" :disabled="!isDeviceBound">
             工作总结
           </van-button>
         </div>
@@ -111,6 +122,17 @@
 
     <!-- 输入区域 -->
     <div class="input-area">
+      <!-- 设备未绑定提示 -->
+      <van-notice-bar
+        v-if="!isDeviceBound"
+        color="#ff5252"
+        background="#fff7e6"
+        left-icon="info-o"
+        style="margin-bottom: 8px;"
+      >
+        请先在设置中绑定 WinClaw PC 设备
+      </van-notice-bar>
+      
       <!-- 附件预览 -->
       <AttachmentPreview
         v-if="pendingAttachments.length > 0"
@@ -123,26 +145,29 @@
         <van-field
           v-model="inputMessage"
           type="textarea"
-          placeholder="输入消息..."
+          :placeholder="isDeviceBound ? '输入消息...' : '请先绑定设备后开始对话'"
           rows="1"
           autosize
           :maxlength="4000"
           show-word-limit
+          :disabled="!isDeviceBound"
           @keydown.enter.exact="handleEnterKey"
         >
           <template #button>
             <div class="input-actions">
-              <van-icon name="add-o" size="22" @click="handleSelectFile" title="添加附件" />
+              <van-icon name="add-o" size="22" @click="handleSelectFile" title="添加附件" :class="{ disabled: !isDeviceBound }" />
               <van-icon 
                 :name="isRecording ? 'stop-circle' : 'audio'" 
                 size="22" 
                 :color="isRecording ? 'red' : ''"
                 @click="handleVoiceInput" 
+                :class="{ disabled: !isDeviceBound }"
               />
               <van-button
                 type="primary"
                 size="small"
                 :loading="chatStore.isLoading"
+                :disabled="!isDeviceBound"
                 @click="handleSend"
               >
                 发送
@@ -203,6 +228,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore, type Session, type Attachment } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
+import { useDeviceStore } from '@/stores/device'
 import { showToast, showLoadingToast, closeToast, showConfirmDialog } from 'vant'
 import { fileApi } from '@/api'
 import { getSpeechRecognizer, type RecognitionResult } from '@/utils/speech'
@@ -213,15 +239,18 @@ const router = useRouter()
 const authStore = useAuthStore()
 const chatStore = useChatStore()
 const settingsStore = useSettingsStore()
+const deviceStore = useDeviceStore()
 
 const inputMessage = ref('')
 const showSidebar = ref(false)
 const messageListRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
-// 使用chatStore的会话列表
+// 使用 chatStore 的会话列表
 const sessions = computed(() => chatStore.sessions)
 const pendingAttachments = ref<Attachment[]>([])
 const isRecording = ref(false)
+// 检查设备绑定状态
+const isDeviceBound = computed(() => deviceStore.hasDevice)
 const speechRecognizer = getSpeechRecognizer({
   lang: 'zh-CN',
   continuous: false,
@@ -241,6 +270,9 @@ onMounted(() => {
   
   // 加载会话列表（用于侧边栏历史会话）
   chatStore.loadSessions()
+  
+  // 获取设备信息（检查是否已绑定）
+  deviceStore.fetchDeviceInfo()
   
   // 初始化语音识别回调
   setupSpeechRecognizer()
@@ -824,6 +856,13 @@ onUnmounted(() => {
 .input-actions .van-icon:active {
   opacity: 0.7;
   transform: scale(0.95);
+}
+
+/* 禁用状态样式 */
+.input-actions .van-icon.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* 录音状态动画 */

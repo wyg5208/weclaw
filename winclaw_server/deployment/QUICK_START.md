@@ -21,7 +21,7 @@
 ### 步骤 2：执行一键部署脚本
 
 ```powershell
-cd D:\python_projects\winclaw_server\deployment
+cd D:\python_projects\weclaw_server\deployment
 .\one_click_deploy.ps1
 ```
 

@@ -202,6 +202,9 @@ class ToolRegistry:
             # 定时任务工具需要模型注册表和工具注册表来执行 AI 任务
             # 这些会在注册后通过 set_agent_dependencies 方法设置
             kwargs["db_path"] = tool_config.get("db_path", "")
+        elif tool_name == "wechat":
+            kwargs["config_path"] = tool_config.get("config_path", "")
+            kwargs["knowledge_base_path"] = tool_config.get("knowledge_base_path", "")
                 
         return kwargs
 

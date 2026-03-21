@@ -29,6 +29,7 @@ from .db.database import init_database  # 导入数据库初始化
 
 # 配置日志（使用统一的日志配置模块）
 # setup_logging 将在 lifespan 中调用，确保在应用启动前完成配置
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -45,7 +46,6 @@ async def lifespan(app: FastAPI):
         separate_error=True
     )
     
-    logger = logging.getLogger(__name__)
     logger.info("="*60)
     logger.info("WinClaw 远程服务启动")
     logger.info("="*60)
@@ -154,6 +154,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 挂载管理后台子应用
+from .admin.main import app as admin_app
+app.mount("/admin", admin_app)
 
 # 注册 HTTP 请求日志中间件
 from .middleware.logging_middleware import setup_request_logging

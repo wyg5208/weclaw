@@ -130,6 +130,11 @@ class BridgeConnectionManager:
                 self._flush_offline_messages(user_id, session_id)
             )
             
+            # ✅ 新增：通知 PWA 端设备已上线
+            asyncio.create_task(
+                broadcast_winclaw_status_change(user_id, "online")
+            )
+            
         return connection
         
     async def _flush_offline_messages(self, user_id: str, session_id: str):
@@ -184,28 +189,87 @@ class BridgeConnectionManager:
         return None
     
     def get_user_connection(self, user_id: str) -> Optional[WinClawConnection]:
-        """获取用户绑定的 WinClaw 连接"""
+        """获取用户绑定的 WinClaw 连接
+        
+        策略：
+        1. 优先使用 user_id -> session_id 直接映射
+        2. 通过 device_id 查找
+        3. ✅ 新增：检查所有连接的设备指纹是否对应该用户（降级兼容）
+        """
         # 优先使用 user_id -> session_id 直接映射
         session_id = self._user_session_map.get(user_id)
         if session_id:
             conn = self._connections.get(session_id)
             if conn:
+                # logger.debug(f"找到用户 {user_id[:8]} 的直接连接：session={session_id[:8]}")  # 调试用
                 return conn
         
-        # 降级：通过 device_id 查找
+        # 降级：通过 device_id查找
         device_id = self._user_device_map.get(user_id)
         if device_id:
-            return self.get_connection_by_device(device_id)
+            conn = self.get_connection_by_device(device_id)
+            if conn:
+                # logger.debug(f"通过设备 ID 找到用户 {user_id[:8]} 的连接：device={device_id[:8]}")  # 调试用
+                return conn
+        
+        # ✅ Phase 3.1: 检查所有活跃连接，查找设备指纹匹配该用户的连接
+        # 这用于处理 PWA 用户与桌面端绑定用户不一致的情况
+        from .. import context
+        user_manager = context.get_user_manager()
+        
+        if user_manager:
+            for session_id, conn in self._connections.items():
+                # 如果连接已经有 user_id，跳过（已经在前面的逻辑中处理过）
+                if conn.user_id and conn.user_id != user_id:
+                    continue
+                
+                # 检查这个设备的指纹是否属于目标用户
+                if conn.device_fingerprint:
+                    fingerprint_owner = user_manager.verify_device_fingerprint(conn.device_fingerprint)
+                    if fingerprint_owner == user_id:
+                        logger.info(f"通过设备指纹匹配找到用户 {user_id[:8]} 的连接：session={session_id[:8]}, fingerprint={conn.device_fingerprint[:16]}...")
+                        # 更新映射，便于下次快速查找
+                        self._user_session_map[user_id] = session_id
+                        if conn.device_id:
+                            self._user_device_map[user_id] = conn.device_id
+                        return conn
+        
+        logger.warning(f"未找到用户 {user_id[:8]} 的 WinClaw 连接")
         return None
     
     def get_user_connections(self, user_id: str) -> list[WinClawConnection]:
-        """获取用户绑定的所有 WinClaw 连接（支持多设备）"""
+        """获取用户绑定的所有 WinClaw 连接
+        
+        设计定义：系统采用严格 1：1 绑定模型（一个用户只能绑定一个桌面端）。
+        此方法返回列表以兼容展展功能，实际正常情况应不超过 1 个连接。
+        对话类消息请使用 get_primary_connection()。
+        
+        包含降级策略：如果直接映射没有结果，会检查设备指纹匹配。
+        """
         connections = []
         
-        # 查找所有该用户的连接
+        # 查找所有该用户的连接（通过直接映射）
         for session_id, conn in self._connections.items():
             if conn.user_id == user_id:
                 connections.append(conn)
+        
+        # [建议E] 降级内容：如果没有找到直接连接，尝试通过设备指纹匹配
+        if not connections:
+            from .. import context
+            user_manager = context.get_user_manager()
+            
+            if user_manager:
+                for session_id, conn in self._connections.items():
+                    # 跳过已经有 user_id 的连接
+                    if conn.user_id and conn.user_id != user_id:
+                        continue
+                    
+                    # 检查设备指纹是否属于该用户
+                    if conn.device_fingerprint:
+                        fingerprint_owner = user_manager.verify_device_fingerprint(conn.device_fingerprint)
+                        if fingerprint_owner == user_id:
+                            logger.info(f"通过设备指纹匹配找到用户 {user_id[:8]} 的额外连接：session={session_id[:8]}")
+                            connections.append(conn)
         
         return connections
     
@@ -262,7 +326,7 @@ class BridgeConnectionManager:
     def register_pwa_request(self, request_id: str, user_id: str, pwa_session_id: str):
         """注册 PWA 请求，用于响应路由"""
         self._pwa_requests[request_id] = (user_id, pwa_session_id)
-        logger.debug(f"PWA 请求已注册: request={request_id[:8]}, user={user_id[:8]}, session={pwa_session_id[:16]}")
+        # logger.debug(f"PWA 请求已注册：request={request_id[:8]}, user={user_id[:8]}, session={pwa_session_id[:16]}")  # 调试用
     
     def get_pwa_session(self, request_id: str) -> Optional[tuple[str, str]]:
         """获取请求对应的 PWA session
@@ -279,12 +343,12 @@ class BridgeConnectionManager:
     def register_stream_request(self, request_id: str, queue: asyncio.Queue):
         """注册流式请求队列"""
         self._stream_queues[request_id] = queue
-        logger.debug(f"流式请求已注册: request={request_id[:8]}")
+        # logger.debug(f"流式请求已注册：request={request_id[:8]}")  # 调试用
     
     def unregister_stream_request(self, request_id: str):
         """注销流式请求队列"""
         self._stream_queues.pop(request_id, None)
-        logger.debug(f"流式请求已注销: request={request_id[:8]}")
+        # logger.debug(f"流式请求已注销：request={request_id[:8]}")  # 调试用
     
     def get_stream_queue(self, request_id: str) -> Optional[asyncio.Queue]:
         """获取流式请求队列"""
@@ -518,7 +582,7 @@ async def handle_bridge_message(connection: WinClawConnection, message: dict):
             
             manager.complete_request(connection.session_id, request_id, message)
             manager.complete_pwa_request(request_id)
-            logger.info(f"响应完成: request={request_id[:8]}, type={msg_type}")
+            # logger.info(f"响应完成：request={request_id[:8]}, type={msg_type}")  # 调试用
     
     elif msg_type in ("tool_call", "tool_result", "thinking", "thinking_start"):
         # 工具调用消息 - 优先推送到队列
@@ -543,32 +607,64 @@ async def handle_bridge_message(connection: WinClawConnection, message: dict):
 async def forward_to_pwa_by_request(manager: BridgeConnectionManager, request_id: str, message: dict):
     """通过请求 ID 转发消息到对应的 PWA 用户
     
-    注意：PWA 的 HTTP session_id 和 WebSocket session_id 不同，
-    所以我们使用 user_id 来路由消息。
+    [建议B] 修复回路逻辑：
+    1. 优先使用 pwa_session_id 定点路由到具体浏览器标签页（WebSocket 路径）
+    2. 对于 WebSocket 路径，pwa_session_id 就是该浏览器的 WS session_id，可直接路由
+    3. 对于 HTTP/SSE 路径，响应通过 stream_queue 传递，不依赖此函数
+    4. 降级内容：如果 session 路由失败，才广播给该用户所有 WS 连接
+    
+    注：PWA 的 HTTP session_id 和 WebSocket session_id 格式不同，
+    所以 HTTP 消息返回主要靠 SSE stream_queue，此处仅处理 WS 路由。
     """
     from .. import context
     
+    msg_type = message.get("type", "unknown")
+    
     pwa_manager = context.get_connection_manager()
     if not pwa_manager:
+        logger.warning(f"转发响应失败: PWA 管理器不存在, request={request_id[:8] if request_id else 'none'}, type={msg_type}")
         return
     
-    # 尝试通过 request_id 获取 user_id
     user_id = None
+    pwa_session_id = None
+    
+    # 尝试通过 request_id 获取 user_id 和 pwa_session_id
     if request_id:
         pwa_info = manager.get_pwa_session(request_id)
         if pwa_info:
             user_id, pwa_session_id = pwa_info
+            # logger.info(f"响应路由查找：request={request_id[:8]}, user={user_id[:8]}, session={pwa_session_id[:16] if pwa_session_id else 'none'}")  # 调试用
+        else:
+            logger.warning(f"响应路由查找失败：request={request_id[:8]} 未找到对应的 PWA session")
     
     # 如果没有从 request_id 获取到 user_id，尝试从 payload 中获取
     if not user_id:
         payload = message.get("payload", {})
         user_id = payload.get("user_id", "")
+        if user_id:
+            logger.info(f"从 payload 获取 user_id: {user_id[:8]}")
     
-    # 使用 user_id 发送消息到用户的所有 WebSocket 连接
-    if user_id:
-        await pwa_manager.send_message(user_id, message)
-    else:
-        logger.warning("无法转发到 PWA：缺少 user_id")
+    if not user_id:
+        logger.warning(f"无法转发到 PWA：缺少 user_id, request={request_id[:8] if request_id else 'none'}")
+        return
+    
+    # 检查 PWA连接状态
+    ws_connected = pwa_manager.is_connected(user_id)
+    ws_count = len(pwa_manager._user_connections.get(user_id, set()))
+    # logger.info(f"PWA连接状态：user={user_id[:8]}, ws_connected={ws_connected}, ws_count={ws_count}")  # 调试用
+    
+    # [建议 B] 优先路由到具体的 WebSocket session（防止广播到同一用户的其他浏览器标签页）
+    if pwa_session_id:
+        sent = await pwa_manager.send_to_session(pwa_session_id, message)
+        if sent:
+            # logger.info(f"响应已定点路由：request={request_id[:8]}, session={pwa_session_id[:16]}, type={msg_type}")  # 调试用
+            return
+        # send_to_session 返回 False 说明该 session 不是 WS 连接（HTTP/SSE 路径）
+        logger.info(f"定点路由失败: session={pwa_session_id[:16] if len(pwa_session_id)>16 else pwa_session_id} 不在 WS 中，尝试广播")
+    
+    # 降级：广播到用户所有 WebSocket 连接（主要用于状态通知类消息）
+    sent = await pwa_manager.send_message(user_id, message)
+    logger.info(f"广播响应到用户: user={user_id[:8]}, type={msg_type}, sent={sent}")
 
 
 async def forward_to_pwa(user_id: str, message: dict):

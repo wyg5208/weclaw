@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+    <h1 class="text-3xl font-bold text-cyan-400 mb-6">设备管理</h1>
+    
+    <!-- 设备列表 -->
+    <div class="cyber-card rounded-xl p-6">
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr>
+                        <th class="py-3 px-4">设备名</th>
+                        <th class="py-3 px-4">所属用户</th>
+                        <th class="py-3 px-4">设备 ID</th>
+                        <th class="py-3 px-4">绑定时间</th>
+                        <th class="py-3 px-4">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-table">
+                    <tr><td colspan="5" class="text-center text-gray-500 py-8">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const currentToken = localStorage.getItem('admin_token');
+if (!currentToken) {
+    window.location.href = '/admin/login';
+}
+
+async function loadDevices() {
+    try {
+        const response = await fetch('/admin/devices/list', {
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (!response.ok) throw new Error('加载失败');
+        const data = await response.json();
+        
+        const tbody = document.getElementById('devices-table');
+        tbody.innerHTML = data.items.map(device => `
+            <tr>
+                <td class="py-3 px-4">${device.device_name}</td>
+                <td class="py-3 px-4">${device.username || '-'}</td>
+                <td class="py-3 px-4 font-mono text-xs">${device.device_id.slice(0, 16)}...</td>
+                <td class="py-3 px-4 text-sm">${device.bound_at ? device.bound_at.split('T')[0] : '-'}</td>
+                <td class="py-3 px-4">
+                    <button onclick="unbindDevice('${device.binding_id}')" class="text-pink-400 hover:text-pink-300">解绑</button>
+                </td>
+            </tr>
+        `).join('');
+        
+    } catch (err) {
+        console.error('加载设备列表失败:', err);
+    }
+}
+
+async function unbindDevice(bindingId) {
+    if (!confirm('确定要解绑该设备吗？用户的 Token 也将被吊销。')) return;
+    
+    try {
+        const response = await fetch(`/admin/devices/${bindingId}/unbind`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        
+        if (response.ok) {
+            alert('设备已解绑');
+            loadDevices();
+        } else {
+            const error = await response.json();
+            alert('操作失败：' + error.detail);
+        }
+    } catch (err) {
+        alert('操作失败');
+    }
+}
+
+loadDevices();
+</script>
+{% endblock %}

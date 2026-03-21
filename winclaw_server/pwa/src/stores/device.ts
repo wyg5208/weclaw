@@ -35,6 +35,11 @@ export const useDeviceStore = defineStore('device', () => {
   // Getters
   const hasDevice = computed(() => !!deviceInfo.value && deviceInfo.value.status === 'active')
   const isDeviceOnline = computed(() => {
+    // 优先使用服务器返回的 is_online 字段
+    if (deviceInfo.value && 'is_online' in deviceInfo.value) {
+      return (deviceInfo.value as DeviceInfo & { is_online?: boolean }).is_online === true
+    }
+    // 降级使用最后连接时间判断
     if (!deviceInfo.value?.last_connected) return false
     const lastConnected = new Date(deviceInfo.value.last_connected).getTime()
     const now = Date.now()

@@ -30,6 +30,7 @@ API_KEY_ENTRIES: list[dict[str, str]] = [
     {"env": "GLM_API_KEY", "label": "智谱 GLM API Key", "hint": "sk-..."},
     {"env": "KIMI_API_KEY", "label": "Moonshot KIMI API Key", "hint": "sk-..."},
     {"env": "QWEN_API_KEY", "label": "阿里云 QWEN API Key", "hint": "sk-..."},
+    # 注：WECLAW_ACCESS_TOKEN 和 WECLAW_REFRESH_TOKEN 为内部使用，不在 UI 中显示
 ]
 
 

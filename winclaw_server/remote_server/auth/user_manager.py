@@ -75,7 +75,8 @@ class UserManager:
                     device_fingerprint TEXT,
                     settings TEXT,
                     login_attempts INTEGER DEFAULT 0,
-                    locked_until TEXT
+                    locked_until TEXT,
+                    tokens_revoked_at TEXT
                 )
             """)
             
@@ -111,11 +112,12 @@ class UserManager:
                     bound_at TEXT,
                     last_connected TEXT,
                     created_at TEXT NOT NULL,
+                    expires_at TEXT,
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             """)
             
-            # 创建索引
+            # 创建基础索引
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_bindings_user ON device_bindings(user_id)
             """)
@@ -123,8 +125,61 @@ class UserManager:
                 CREATE INDEX IF NOT EXISTS idx_bindings_token ON device_bindings(binding_token)
             """)
             
+            # [建议 A] 设备指纹唯一约束（仅对 active 状态）：防止一个设备绑定多个用户
+            # SQLite 局部唯一索引，保证 active 状态下同一指纹只能对应一个用户
+            try:
+                cursor.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_bindings_fp_active
+                    ON device_bindings(device_fingerprint) WHERE status = 'active'
+                """)
+            except sqlite3.IntegrityError as e:
+                logger.warning(f"无法创建设备指纹唯一索引（可能存在重复数据）: {e}")
+                logger.warning("请手动清理重复的设备指纹后重启服务")
+                # 不阻塞启动，继续执行
+            
             conn.commit()
+            
+            # ===== 数据库迁移：为现有数据库补充新字段 =====
+            self._migrate_database(conn)
+            
             logger.info(f"用户数据库初始化完成: {self.db_path}")
+    
+    def _migrate_database(self, conn):
+        """对现有数据库执行迁移，补充新增字段"""
+        cursor = conn.cursor()
+        migrations = [
+            # [建议C] 为 device_bindings 补充 expires_at 列
+            ("ALTER TABLE device_bindings ADD COLUMN expires_at TEXT",
+             "device_bindings.expires_at"),
+            # [建议D] 为 users 表补充 tokens_revoked_at 列
+            ("ALTER TABLE users ADD COLUMN tokens_revoked_at TEXT",
+             "users.tokens_revoked_at"),
+        ]
+        for sql, desc in migrations:
+            try:
+                cursor.execute(sql)
+                conn.commit()
+                logger.info(f"数据库迁移成功: 添加 {desc}")
+            except Exception:
+                # 列已存在时 SQLite 会抛异常，忽略即可
+                pass
+        
+        # [建议 A] 补充局部唯一索引（迁移时也尝试创建，防止旧库漏建）
+        try:
+            cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_bindings_fp_active
+                ON device_bindings(device_fingerprint) WHERE status = 'active'
+            """)
+            conn.commit()
+            logger.info("数据库迁移成功：创建设备指纹唯一索引")
+        except sqlite3.IntegrityError as e:
+            # 若旧数据已有重复指纹的 active 绑定，记录警告并提供解决 SQL
+            logger.warning(f"创建设备指纹唯一索引失败（可能存在历史脏数据）: {e}")
+            logger.warning("请使用以下 SQL 清理重复数据后重启服务：")
+            logger.warning("DELETE FROM device_bindings WHERE binding_id NOT IN (")
+            logger.warning("    SELECT MAX(binding_id) FROM device_bindings")
+            logger.warning("    WHERE status = 'active' GROUP BY device_fingerprint")
+            logger.warning(");")
     
     def create_user(
         self,
@@ -350,6 +405,12 @@ class UserManager:
         """将数据库行转换为用户对象"""
         settings_data = json.loads(row["settings"]) if row["settings"] else {}
         
+        # 兼容旧数据库（tokens_revoked_at 列可能不存在）
+        try:
+            tokens_revoked_at_raw = row["tokens_revoked_at"]
+        except (IndexError, KeyError):
+            tokens_revoked_at_raw = None
+        
         return User(
             user_id=row["user_id"],
             username=row["username"],
@@ -361,7 +422,8 @@ class UserManager:
             device_fingerprint=row["device_fingerprint"],
             settings=UserSettings.from_dict(settings_data),
             login_attempts=row["login_attempts"] or 0,
-            locked_until=datetime.fromisoformat(row["locked_until"]) if row["locked_until"] else None
+            locked_until=datetime.fromisoformat(row["locked_until"]) if row["locked_until"] else None,
+            tokens_revoked_at=datetime.fromisoformat(tokens_revoked_at_raw) if tokens_revoked_at_raw else None
         )
     
     def close(self):
@@ -389,23 +451,26 @@ class UserManager:
                 # 已有绑定，返回 None 表示不能再绑定
                 return None
                 
-            # 清理过期的 pending 记录（超过 10 分钟）
-            from datetime import datetime, timedelta
-            expiry_time = datetime.now() - timedelta(minutes=10)
+            # [建议C] 设置明确的 expires_at 字段（10 分钟有效）
+            now = datetime.now()
+            expiry_time = now - timedelta(minutes=10)
+            expires_at = now + timedelta(minutes=10)
+
+            # 清理过期的 pending 记录
             cursor.execute("""
                 DELETE FROM device_bindings 
-                WHERE user_id = ? AND status = 'pending' AND created_at < ?
-            """, (user_id, expiry_time.isoformat()))
+                WHERE user_id = ? AND status = 'pending'
+                AND (expires_at IS NOT NULL AND expires_at < ? OR created_at < ?)
+            """, (user_id, now.isoformat(), expiry_time.isoformat()))
                 
             # 生成新的绑定记录
             binding_id = str(uuid.uuid4())
-            now = datetime.now()
                 
             cursor.execute("""
                 INSERT INTO device_bindings 
-                (binding_id, user_id, binding_token, status, created_at)
-                VALUES (?, ?, ?, 'pending', ?)
-            """, (binding_id, user_id, token, now.isoformat()))
+                (binding_id, user_id, binding_token, status, created_at, expires_at)
+                VALUES (?, ?, ?, 'pending', ?, ?)
+            """, (binding_id, user_id, token, now.isoformat(), expires_at.isoformat()))
                 
             conn.commit()
                 
@@ -418,14 +483,17 @@ class UserManager:
             binding_token: 绑定 Token
             
         Returns:
-            用户 ID，未找到返回 None
+            用户 ID，未找到或已过期返回 None
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            now = datetime.now().isoformat()
+            # [建议C] 检查 expires_at，同时兼容旧数据（expires_at 为 NULL 时也认为有效）
             cursor.execute("""
                 SELECT user_id FROM device_bindings 
                 WHERE binding_token = ? AND status = 'pending'
-            """, (binding_token,))
+                AND (expires_at IS NULL OR expires_at > ?)
+            """, (binding_token, now))
             
             row = cursor.fetchone()
             return row["user_id"] if row else None
@@ -448,12 +516,14 @@ class UserManager:
         
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            now = datetime.now()
             
-            # 查找待绑定的记录
+            # 查找待绑定的记录，[建议C] 同时检查 expires_at
             cursor.execute("""
                 SELECT binding_id, user_id FROM device_bindings 
                 WHERE binding_token = ? AND status = 'pending'
-            """, (binding_token,))
+                AND (expires_at IS NULL OR expires_at > ?)
+            """, (binding_token, now.isoformat()))
             
             row = cursor.fetchone()
             if not row:
@@ -462,14 +532,16 @@ class UserManager:
             binding_id = row["binding_id"]
             user_id = row["user_id"]
             
-            # 检查该用户是否已有相同指纹的设备绑定
+            # [建议A] 检查该指纹是否已被任意用户（包括本用户）绑定
+            # 防止同一设备被多个用户绑定，同时防止触发 DB 唯一约束异常
             cursor.execute("""
-                SELECT binding_id FROM device_bindings 
-                WHERE user_id = ? AND device_fingerprint = ? AND status = 'active'
-            """, (user_id, device_fingerprint))
+                SELECT binding_id, user_id FROM device_bindings 
+                WHERE device_fingerprint = ? AND status = 'active'
+            """, (device_fingerprint,))
             
-            if cursor.fetchone():
-                logger.warning(f"用户 {user_id} 已有相同指纹的设备绑定")
+            existing = cursor.fetchone()
+            if existing:
+                logger.warning(f"设备指纹已被用户 {existing['user_id']} 绑定，拒绝再次绑定")
                 return False
             
             # 检查是否已有活跃绑定（防止并发）
@@ -482,8 +554,6 @@ class UserManager:
                 logger.warning(f"用户 {user_id} 已有活跃绑定")
                 return False
             
-            now = datetime.now()
-            
             # 更新绑定状态，并删除该用户的其他 pending 记录
             cursor.execute("""
                 UPDATE device_bindings SET
@@ -492,7 +562,8 @@ class UserManager:
                     device_fingerprint = ?,
                     status = 'active',
                     bound_at = ?,
-                    binding_token = NULL
+                    binding_token = NULL,
+                    expires_at = NULL
                 WHERE binding_id = ?
             """, (device_id, device_name, device_fingerprint, now.isoformat(), binding_id))
             
@@ -585,3 +656,46 @@ class UserManager:
             """, (user_id,))
             conn.commit()
             return cursor.rowcount > 0
+    
+    # ===== [建议D] Token 吊销管理 =====
+    
+    def revoke_tokens(self, user_id: str) -> bool:
+        """吊销用户所有 Token
+        
+        设置吊销时间戳为当前 UTC 时间。
+        此时间戳之前签发的所有 access_token/refresh_token 将不再有效。
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            是否成功吊销
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE users SET tokens_revoked_at = ?
+                WHERE user_id = ?
+            """, (datetime.utcnow().isoformat(), user_id))
+            conn.commit()
+            success = cursor.rowcount > 0
+            if success:
+                logger.info(f"已吊销用户 {user_id[:8]} 的所有 token")
+            return success
+    
+    def is_token_revoked(self, user_id: str, token_iat: float) -> bool:
+        """检查 Token 是否已被吊销
+        
+        Args:
+            user_id: 用户 ID
+            token_iat: token 的签发时间（Unix 时间戳）
+            
+        Returns:
+            True 表示已吊销
+        """
+        user = self.find_by_id(user_id)
+        if not user or not user.tokens_revoked_at:
+            return False
+        # token_iat 是 Unix 时间戳（整数），tokens_revoked_at 是 UTC datetime
+        token_issued = datetime.utcfromtimestamp(float(token_iat))
+        return token_issued <= user.tokens_revoked_at
