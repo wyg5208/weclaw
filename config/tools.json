@@ -503,6 +503,25 @@
       },
       "actions": ["add_medication", "query_medications", "mark_medication_taken", "update_medication", "delete_medication"]
     },
+    "user_profile": {
+      "enabled": true,
+      "module": "src.tools.user_profile",
+      "class": "UserProfileTool",
+      "display": {
+        "name": "用户档案",
+        "emoji": "👤",
+        "description": "管理用户个人信息、家庭成员、VIP社交联系人档案",
+        "category": "life"
+      },
+      "config": {
+        "db_path": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["update_profile", "query_profile", "add_family_member", "update_family_member", "add_social_contact", "query_contacts", "get_upcoming_birthdays", "record_child_growth"]
+    },
     "knowledge_rag": {
       "enabled": true,
       "module": "src.tools.knowledge_rag",

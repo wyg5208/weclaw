@@ -237,6 +237,8 @@ class ToolRegistry:
             kwargs["output_dir"] = tool_config.get("output_dir", "generated")
         elif tool_name == "coding_assistant":
             kwargs["output_dir"] = tool_config.get("output_dir", "generated")
+        elif tool_name == "user_profile":
+            kwargs["db_path"] = tool_config.get("db_path", "")
                 
         return kwargs
 

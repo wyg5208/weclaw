@@ -28,6 +28,7 @@ class ConversationState(Enum):
     CHATTING = "chatting"    # 对话中
     THINKING = "thinking"    # AI思考中
     SPEAKING = "speaking"    # TTS播放中
+    WAITING_COMPANION_RESPONSE = "waiting_companion_response"  # 等待用户回应主动关怀
 
 
 class ConversationManager(QObject):

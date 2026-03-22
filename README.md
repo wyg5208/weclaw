@@ -2,7 +2,7 @@
 
 > 你的随身 AI 桌面管家 - 38+ 工具 + 移动端远程控制
 
-**版本**: v2.11.0  
+**版本**: v2.11.1  
 **更新日期**: 2026 年 3 月 22 日
 
 Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**身材小巧**（仅 Python 环境即可运行），但**内含 38+ 实用工具**，从文件管理、浏览器自动化到语音交互 OCR 识别样样精通。
@@ -436,40 +436,33 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 ## 版本日志
 
-### 最新版本 (v2.11.0)
+### 最新版本 (v2.11.1)
 
 **发布日期**: 2026-03-22
 
-### 功能新增 🚀
+### 功能增强 🔧
 
-#### Phase 6 工具扩展方案 — 16 个新工具 / 77 个 Actions 🧰
-- ✅ **PDF 处理工具** — 合并/拆分/提取/压缩/加密/解密（6 actions）
-- ✅ **格式转换工具** — MD/DOCX/PDF/HTML/图片格式互转，Pandoc + XeLaTeX（12 actions）
-- ✅ **PPT 生成工具** — 演示文稿生成/添加幻灯片/导出 PDF（3 actions）
-- ✅ **AI 写作工具** — 论文/文章/小说/续写，Jinja2 模板（4 actions）
-- ✅ **证件照工具** — 证件照生成/背景替换/裁剪/排版（5 actions）
-- ✅ **数据处理工具** — Excel/CSV/JSON 读取/筛选/排序/统计/导出（8 actions）
-- ✅ **数据可视化工具** — 柱状图/折线图/饼图/散点图/热力图/仪表盘（6 actions）
-- ✅ **文献检索工具** — OpenAlex API 论文搜索/详情/引用/导出（4 actions）
-- ✅ **GIF 制作工具** — 图片合成/屏幕录制/视频转 GIF（3 actions）
-- ✅ **合同生成工具** — 租赁/劳动/买卖/服务 4 种合同模板（4 actions）
-- ✅ **财务报表工具** — 三大财务报表 + 比率分析（5 actions）
-- ✅ **简历制作工具** — 5 种简历模板生成（3 actions）
-- ✅ **思维导图工具** — 纯 SVG 思维导图生成（3 actions）
-- ✅ **语音转文字工具** — 音频转录，whisper 条件导入（3 actions）
-- ✅ **教育学习工具** — 测验生成/闪卡制作/学习计划/概念解释（4 actions）
-- ✅ **编程辅助工具** — 代码模板/分析/测试生成/格式化（4 actions）
+#### prompts.py 意图识别体系优化 — 让新工具不再"隐身" 🧠
+- ✅ **意图映射表补全** — `INTENT_CATEGORIES` 新增 7 个意图维度（document_processing / data_analysis / creative_content / professional_docs / development / education / research）
+- ✅ **工具映射补全** — `INTENT_TOOL_MAPPING` 补全 16 个新工具的意图→工具映射
+- ✅ **优先级配置补全** — `INTENT_PRIORITY_MAP` 补全 7 个新意图的 recommended/alternative 优先级
+- ✅ **关键词冲突解决** — PDF/pdf 从 knowledge 转移到 document_processing，"论文"精确化避免歧义
+- ✅ **系统提示词扩展** — `CORE_SYSTEM_PROMPT` 新增 6 个工具场景决策树（~2,000→6,029 字符）
+- ✅ **协作指南增强** — `ASSEMBLY_TASK_PROMPT` 新增 7 个新工具的协作说明
+- ✅ **遗留清理** — 移除已删除翻译工具的"翻译"关键词、修正输出目录路径（5 处）
+- ✅ **关怀提示词** — `COMPANION_PROMPT_MODULE` 新增用户主动请求关怀引导
 
-### 设计决策
-- 🗑️ 移除翻译工具（translator.py）— 大模型原生翻译能力更优
-- 🔄 多工具采用条件导入 + 降级策略（rembg, moviepy, whisper）
-- 📦 7 批次渐进式交付，135 个测试用例 100% 通过
-
-### 技术栈扩展
-- 📝 新增依赖：pypdf, python-docx, python-pptx, pandas, openpyxl, matplotlib, httpx, black, mss
-- 🔧 外部工具：Pandoc + MiKTeX XeLaTeX（中文 PDF 渲染）
+### 测试验证
+- 📝 15/15 意图识别测试用例全部通过
+- 📝 向后兼容性验证通过
 
 ---
+
+### v2.11.1 (2026-03-22)
+- ✅ prompts.py 意图识别体系优化：新增 7 个意图维度，补全 16 个新工具映射
+- ✅ CORE_SYSTEM_PROMPT 扩展至 6,029 字符，新增 6 个工具场景决策树
+- ✅ 关键词冲突解决 + 遗留配置清理
+- ✅ 15/15 意图识别测试通过
 
 ### v2.11.0 (2026-03-22)
 - ✅ Phase 6 工具扩展方案：新增 16 个工具、77 个 Actions
@@ -687,4 +680,4 @@ Weclaw 基于 Python 开发，天生具有跨平台能力。虽然主要在 Wind
 让 AI 成为你的效率助手！（Windows/macOS/Linux）
 
 
-**当前版本**: v2.11.0
+**当前版本**: v2.11.1

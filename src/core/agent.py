@@ -239,7 +239,7 @@ class Agent:
         model_selector: ModelSelector | None = None,
         cost_tracker: CostTracker | None = None,
         model_key: str = "deepseek-chat",
-        system_prompt: str = CORE_SYSTEM_PROMPT,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         max_steps: int = 60,
         inference_timeout: float = DEFAULT_INFERENCE_TIMEOUT,
         # Phase 6: 工具暴露策略配置

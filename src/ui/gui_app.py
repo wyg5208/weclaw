@@ -63,6 +63,7 @@ class GuiAgent(QObject):
     reasoning_chunk = Signal(str)  # 思考内容块
     reasoning_finished = Signal()  # 思考过程完成
     cron_job_status = Signal(str, str, str)  # (job_id, status, description) 定时任务状态
+    companion_care_message = Signal(str, str)  # (message, interaction_type) 陪伴消息
 
     def __init__(self, agent: Agent, model_registry: ModelRegistry) -> None:
         super().__init__()
@@ -70,9 +71,12 @@ class GuiAgent(QObject):
         self._model_registry = model_registry
         self._tts_enabled = False  # TTS 开关状态
         self._cron_sub_ids: list[tuple[str, int]] = []  # 定时任务事件订阅ID
+        self._companion_sub_ids: list[tuple[str, int]] = []  # 陪伴事件订阅ID
         
         # 订阅定时任务事件
         self._subscribe_cron_events()
+        # 订阅陪伴事件
+        self._subscribe_companion_events()
 
     def _subscribe_cron_events(self) -> None:
         """订阅定时任务事件。"""
@@ -90,6 +94,26 @@ class GuiAgent(QObject):
             self._cron_sub_ids.append((EventType.CRON_JOB_ERROR, sub_error))
         except Exception as e:
             logger.warning(f"订阅定时任务事件失败: {e}")
+
+    def _subscribe_companion_events(self) -> None:
+        """订阅陪伴事件。"""
+        async def _on_companion_care(event_type, data):
+            # data 是 dict 或 CompanionCareEvent 类型
+            message = data.get("message", "") if isinstance(data, dict) else getattr(data, "message", "")
+            interaction_type = data.get("interaction_type", "text") if isinstance(data, dict) else getattr(data, "interaction_type", "text")
+            if message:
+                self.companion_care_message.emit(message, interaction_type)
+        
+        try:
+            from src.core.events import EventType
+            sub_care = self._agent.event_bus.on(
+                EventType.COMPANION_CARE_TRIGGERED,
+                _on_companion_care
+            )
+            self._companion_sub_ids.append((EventType.COMPANION_CARE_TRIGGERED, sub_care))
+            logger.debug("已订阅陪伴事件")
+        except Exception as e:
+            logger.warning(f"订阅陪伴事件失败: {e}")
 
     def set_tts_enabled(self, enabled: bool) -> None:
         """设置 TTS 开关。"""
@@ -404,6 +428,26 @@ class WinClawGuiApp:
         if cron_tool and hasattr(cron_tool, "set_agent_dependencies"):
             cron_tool.set_agent_dependencies(self._model_registry, self._tool_registry, self._agent.event_bus)
 
+        # 初始化陪伴引擎（在 Agent 和 EventBus 创建之后）
+        self._companion_engine = None
+        try:
+            from src.core.companion_engine import CompanionEngine
+            self._companion_engine = CompanionEngine(
+                event_bus=self._agent.event_bus,
+            )
+            logger.info("CompanionEngine 初始化成功")
+            
+            # 启动陪伴调度器（通过 bridge 在异步环境中执行）
+            if self._bridge and self._bridge._loop:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(
+                    self._companion_engine.start_scheduler(),
+                    self._bridge._loop
+                )
+                logger.info("CompanionEngine 调度器启动任务已提交")
+        except Exception as e:
+            logger.warning(f"CompanionEngine 初始化失败: {e}")
+
         # 创建 GUI Agent 包装器
         self._gui_agent = GuiAgent(self._agent, self._model_registry)
 
@@ -605,6 +649,9 @@ class WinClawGuiApp:
             lambda job_id, status, desc: self._on_cron_job_status(job_id, status, desc)
         )
         
+        # 陪伴消息显示
+        self._gui_agent.companion_care_message.connect(self._on_companion_care)
+        
         # TTS 朗读
         self._gui_agent.tts_requested.connect(self._on_tts_speak)
 
@@ -693,6 +740,16 @@ class WinClawGuiApp:
                 self._agent.reset()
             return
         
+        # 检查是否是关怀请求（不阻塞消息发送，两者并行执行）
+        if self._companion_engine and self._check_care_request(message):
+            # 通过异步桥接触发关怀（不阻塞消息发送）
+            if self._bridge and self._bridge._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._companion_engine.on_user_care_request(message),
+                    self._bridge._loop
+                )
+                logger.info("检测到关怀请求，已触发陪伴关怀")
+        
         # 检查是否触发工作流
         if self._workflow_loader:
             matched_workflow = self._workflow_loader.match_trigger(message)
@@ -718,6 +775,19 @@ class WinClawGuiApp:
                 self._window._set_thinking_state(False)
                 self._window.set_tool_status("已取消")
         self._current_chat_task = None
+    
+    def _check_care_request(self, message: str) -> bool:
+        """检查用户消息是否包含关怀请求关键词。
+        
+        Args:
+            message: 用户输入的消息
+            
+        Returns:
+            True 如果消息包含关怀请求关键词
+        """
+        from src.core.companion_topics import USER_CARE_REQUEST_KEYWORDS
+        msg_lower = message.lower().strip()
+        return any(kw in msg_lower for kw in USER_CARE_REQUEST_KEYWORDS)
     
     def _setup_global_error_handler(self) -> None:
         """设置全局异常处理器。"""
@@ -1057,6 +1127,22 @@ class WinClawGuiApp:
 
     def _cleanup(self) -> None:
         """清理资源。"""
+        # 停止陪伴调度器
+        if self._companion_engine:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        self._companion_engine.stop_scheduler(),
+                        loop
+                    ).result(timeout=5)
+                else:
+                    loop.run_until_complete(self._companion_engine.stop_scheduler())
+                logger.info("CompanionEngine 调度器已停止")
+            except Exception as e:
+                logger.warning(f"停止陪伴调度器失败: {e}")
+        
         # Phase 6: 清理意识系统
         if self._agent and hasattr(self._agent, 'cleanup'):
             try:
@@ -1542,6 +1628,30 @@ class WinClawGuiApp:
             logger.debug("winotify 未安装，跳过系统通知")
         except Exception as e:
             logger.debug(f"显示系统通知失败: {e}")
+
+    def _on_companion_care(self, message: str, interaction_type: str) -> None:
+        """处理陪伴消息显示。
+        
+        将 CompanionEngine 触发的主动关怀消息显示到聊天区域，
+        并根据 interaction_type 和 TTS 状态决定是否播放语音。
+        
+        Args:
+            message: 陪伴消息内容
+            interaction_type: 交互类型 (text/voice)
+        """
+        if not self._window:
+            return
+        
+        # 在聊天区域显示消息（带有陪伴标识）
+        care_message = f"💝 {message}"
+        self._window._chat_widget.add_ai_message(care_message)
+        self._window.add_tool_log(f"💝 主动陪伴: {message[:50]}...")
+        
+        # 如果 TTS 开启且 interaction_type 是 voice，触发 TTS 播放
+        if self._tts_enabled and interaction_type == "voice":
+            self._on_tts_speak(message)
+        
+        logger.info("陪伴消息已显示: %s", message[:50])
 
     def _on_agent_message_finished(self, full_content: str) -> None:
         """Agent 消息生成完成回调。"""

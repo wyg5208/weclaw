@@ -88,7 +88,7 @@ def _extract_tool_name(func_name: str) -> str:
         "browser_use", "app_control", "voice_input", "voice_output",
         "datetime_tool", "chat_history", "doc_generator",
         "image_generator", "python_runner", "tool_info",
-        "knowledge_rag", "batch_paper_analyzer",
+        "knowledge_rag", "batch_paper_analyzer", "user_profile",
     ]
     for prefix in known_prefixes:
         if func_name.startswith(prefix + "_") or func_name == prefix:

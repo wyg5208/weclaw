@@ -57,6 +57,12 @@ class EventType:
     APP_SHUTDOWN = "app_shutdown"        # 应用即将关闭
     CONFIG_CHANGED = "config_changed"   # 配置项被修改
 
+    # --- 主动陪伴 ---
+    COMPANION_CARE_TRIGGERED = "companion:care_triggered"
+    COMPANION_CARE_COMPLETED = "companion:care_completed"
+    COMPANION_PROFILE_UPDATED = "companion:profile_updated"
+    COMPANION_MOOD_DETECTED = "companion:mood_detected"
+
 
 # =====================================================================
 # 事件数据结构
@@ -198,3 +204,22 @@ class CronJobEvent:
     result: str = ""             # 执行结果（finished时）
     error: str = ""              # 错误信息（error时）
     duration_ms: float = 0.0     # 执行时长（毫秒）
+
+
+@dataclass
+class CompanionCareEvent:
+    """主动陪伴事件数据。"""
+    topic_id: str                # 关怀主题ID
+    message: str = ""            # 关怀消息内容
+    trigger_type: str = "scheduled"  # scheduled/contextual/reactive
+    interaction_type: str = "text"   # text/voice
+    context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CompanionMoodEvent:
+    """情绪检测事件数据。"""
+    mood: str = "neutral"        # positive/negative/neutral
+    sub_mood: str = ""           # stressed/tired/...
+    confidence: float = 0.5
+    source_text: str = ""
