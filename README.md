@@ -2,7 +2,7 @@
 
 > 你的随身 AI 桌面管家 - 38+ 工具 + 移动端远程控制
 
-**版本**: v2.11.1  
+**版本**: v2.12.0  
 **更新日期**: 2026 年 3 月 22 日
 
 Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**身材小巧**（仅 Python 环境即可运行），但**内含 38+ 实用工具**，从文件管理、浏览器自动化到语音交互 OCR 识别样样精通。
@@ -436,27 +436,39 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 ## 版本日志
 
-### 最新版本 (v2.11.1)
+### 最新版本 (v2.12.0)
 
 **发布日期**: 2026-03-22
 
-### 功能增强 🔧
+### 新增功能 🚀
 
-#### prompts.py 意图识别体系优化 — 让新工具不再"隐身" 🧠
-- ✅ **意图映射表补全** — `INTENT_CATEGORIES` 新增 7 个意图维度（document_processing / data_analysis / creative_content / professional_docs / development / education / research）
-- ✅ **工具映射补全** — `INTENT_TOOL_MAPPING` 补全 16 个新工具的意图→工具映射
-- ✅ **优先级配置补全** — `INTENT_PRIORITY_MAP` 补全 7 个新意图的 recommended/alternative 优先级
-- ✅ **关键词冲突解决** — PDF/pdf 从 knowledge 转移到 document_processing，"论文"精确化避免歧义
-- ✅ **系统提示词扩展** — `CORE_SYSTEM_PROMPT` 新增 6 个工具场景决策树（~2,000→6,029 字符）
-- ✅ **协作指南增强** — `ASSEMBLY_TASK_PROMPT` 新增 7 个新工具的协作说明
-- ✅ **遗留清理** — 移除已删除翻译工具的"翻译"关键词、修正输出目录路径（5 处）
-- ✅ **关怀提示词** — `COMPANION_PROMPT_MODULE` 新增用户主动请求关怀引导
+#### 主动陪伴智能系统 (Life Companion Intelligence) 💝
+- ✅ **CompanionEngine 陪伴引擎** — 核心调度器，评分算法(0-100)、定时/上下文/用户主动三种触发模式
+- ✅ **UserProfile 用户档案工具** — 3张数据库表 + 8个Actions，完整用户画像管理
+- ✅ **CareTopicRegistry 关怀主题注册表** — 15个预定义关怀主题 + 5步渐进建档 + 5条行为推断规则
+- ✅ **CooldownManager 防骚扰机制** — 每日预算5次、连续限制2次、拒绝惩罚、asyncio.Lock 交互锁
+- ✅ **MoodDetector 情绪感知** — 关键词匹配检测 5 种情绪状态（positive/negative/neutral/stressed/tired）
+- ✅ **用户主动触发关怀** — 关键词匹配绕过冷却直接触发关怀回应
+- ✅ **GUI 集成** — 💝前缀关怀消息显示 + TTS 语音播报 + EventBus 事件解耦
+- ✅ **30分钟间隔调度器** — 自动检查关怀时机，懒加载随应用启动
 
-### 测试验证
-- 📝 15/15 意图识别测试用例全部通过
-- 📝 向后兼容性验证通过
+### 系统集成
+- 📝 events.py 新增 4 个 companion 事件类型 + 2 个数据类
+- 📝 prompts.py 新增 COMPANION_PROMPT_MODULE + DEFAULT_SYSTEM_PROMPT
+- 📝 agent.py 默认系统提示注入陪伴模块
+- 📝 tools.json / registry.py / tool_exposure.py 完成 user_profile 工具注册
+- 📝 conversation/manager.py 新增 WAITING_COMPANION_RESPONSE 会话状态
+- 🎨 新增约 2,681 行核心代码，修改 8 个文件
 
 ---
+
+### v2.12.0 (2026-03-22)
+- ✅ 主动陪伴智能系统 (Life Companion Intelligence)：AI 从被动工具进化为主动关怀生活伙伴
+- ✅ CompanionEngine 陪伴引擎：评分算法 + 定时/上下文/主动三种触发模式
+- ✅ UserProfile 用户档案工具：3张表 + 8个Actions 完整用户画像
+- ✅ CareTopicRegistry：15个关怀主题 + 5步渐进建档 + 5条行为推断
+- ✅ 防骚扰机制：每日预算、连续限制、拒绝惩罚、交互锁
+- ✅ 情绪感知 + 用户主动触发关怀 + GUI 💝显示 + TTS 播报
 
 ### v2.11.1 (2026-03-22)
 - ✅ prompts.py 意图识别体系优化：新增 7 个意图维度，补全 16 个新工具映射
@@ -680,4 +692,4 @@ Weclaw 基于 Python 开发，天生具有跨平台能力。虽然主要在 Wind
 让 AI 成为你的效率助手！（Windows/macOS/Linux）
 
 
-**当前版本**: v2.11.1
+**当前版本**: v2.12.0
