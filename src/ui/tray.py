@@ -78,7 +78,7 @@ class SystemTray(QSystemTrayIcon):
         self._app = app
         self._setup_menu()
         self._connect_signals()
-        self.setToolTip("WinClaw - " + tr("AI 助手"))
+        self.setToolTip("WeClaw - " + tr("AI 助手"))
 
     def _setup_menu(self) -> None:
         """设置右键菜单。"""

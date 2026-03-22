@@ -126,7 +126,7 @@ class GitHubUpdater:
         self._session = aiohttp.ClientSession(
             headers={
                 "Accept": "application/vnd.github.v3+json",
-                "User-Agent": f"WinClaw/{self.current_version}",
+                "User-Agent": f"WeClaw/{self.current_version}",
             }
         )
         return self

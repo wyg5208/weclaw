@@ -267,7 +267,7 @@ class EmailTool(BaseTool):
 
         执行时序：login() -> _send_imap_id() -> select('INBOX')
         """
-        id_params = '("name" "WinClaw" "version" "1.0.0" "vendor" "WinClaw")'
+        id_params = '("name" "WeClaw" "version" "2.12.0" "vendor" "WeClaw")'
         try:
             # 方法1（推荐）：使用 _command
             typ, dat = imap._command('ID', id_params)

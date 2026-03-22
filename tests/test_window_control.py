@@ -9,8 +9,8 @@ print("窗口控制演示")
 print("=" * 50)
 
 # 1. 获取所有窗口信息
-print("1. 当前所有包含'WinClaw'的窗口:")
-windows = pyautogui.getWindowsWithTitle("WinClaw")
+print("1. 当前所有包含'WeClaw'的窗口:")
+windows = pyautogui.getWindowsWithTitle("WeClaw")
 for i, win in enumerate(windows):
     print(f"  [{i}] {win.title}")
     print(f"     位置: ({win.left}, {win.top})")

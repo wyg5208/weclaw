@@ -475,7 +475,10 @@ class Agent:
         if not result.is_success:
             return
 
+        # 兼容不同的字段名：path 和 file_path
         file_path = result.data.get("path", "") if result.data else ""
+        if not file_path:
+            file_path = result.data.get("file_path", "") if result.data else ""
         if not file_path:
             return
 
@@ -487,8 +490,9 @@ class Agent:
 
         # 判断是否为文件写入类动作
         is_file_gen = (tool_name, action_name) in self._FILE_GEN_ACTIONS
-        # 对于未明确列出的动作，如果 result.data 中有 path 且文件存在，也视为文件生成
-        if not is_file_gen and action_name in ("write", "save", "create", "export", "download"):
+        # 对于未明确列出的动作，检查动作名是否包含文件生成相关的关键词
+        file_gen_keywords = ("write", "save", "create", "export", "download", "generate", "capture", "screenshot")
+        if not is_file_gen and any(kw in action_name.lower() for kw in file_gen_keywords):
             is_file_gen = True
 
         if is_file_gen:

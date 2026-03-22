@@ -30,6 +30,8 @@ class DeviceInfo:
     status: str
     access_token: Optional[str] = None  # ✅ 新增：JWT access token
     refresh_token: Optional[str] = None  # ✅ 新增：JWT refresh token
+    username: Optional[str] = None  # ✅ 绑定的用户名
+    is_online: Optional[bool] = None  # 设备在线状态
 
 
 class DeviceBindClient:
@@ -148,7 +150,16 @@ class DeviceBindClient:
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return DeviceInfo(**data)
+                        # 只取 DeviceInfo 需要的字段，忽略额外字段
+                        return DeviceInfo(
+                            device_id=data.get("device_id", ""),
+                            device_name=data.get("device_name", ""),
+                            bound_at=data.get("bound_at", ""),
+                            last_connected=data.get("last_connected"),
+                            status=data.get("status", ""),
+                            username=data.get("username"),
+                            is_online=data.get("is_online")
+                        )
                     elif response.status == 404:
                         logger.info("当前未绑定设备")
                         return None

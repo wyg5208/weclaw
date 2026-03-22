@@ -1,4 +1,4 @@
-"""允许 python -m src 运行 WinClaw。
+"""允许 python -m src 运行 WeClaw。
 
 支持命令行参数：
     无参数或 --gui    启动 GUI 模式

@@ -243,6 +243,12 @@ class WinClawGuiApp:
         self._remote_request_active: bool = False
         self._remote_username: str = ""
 
+        # 后台工作线程引用（用于正确清理）
+        self._knowledge_worker = None
+
+        # 懒加载标志
+        self._gen_space_loaded = False
+
     @staticmethod
     def _load_dotenv() -> None:
         """加载 .env 文件到环境变量（不覆盖已有值）。
@@ -386,7 +392,7 @@ class WinClawGuiApp:
             QMessageBox.warning(
                 None,
                 "需要配置 API Key",
-                "欢迎使用 WinClaw！\n\n"
+                "欢迎使用 WeClaw！\n\n"
                 "检测到您还没有配置任何 AI 模型的 API Key。\n\n"
                 "请点击菜单【帮助】->【设置】，在【API 密钥】选项卡中配置至少一个模型的 API Key 后才能使用。\n\n"
                 "支持的模型包括：DeepSeek、OpenAI GPT、Claude、Gemini、智谱 GLM、Kimi、通义千问等。",
@@ -674,15 +680,25 @@ class WinClawGuiApp:
 
         # 生成空间
         self._window.generated_space_requested.connect(self._on_open_generated_space)
+        self._window.generated_space_clear_requested.connect(self._on_clear_generated_space)
+        self._window.generated_space_file_delete_requested.connect(self._on_delete_gen_file)
 
         # 知识库
         self._window.knowledge_rag_requested.connect(self._on_open_knowledge_rag)
+        self._window.knowledge_add_file_requested.connect(self._on_add_knowledge_file)
+        self._window.knowledge_add_url_requested.connect(self._on_add_knowledge_url)
+        self._window.knowledge_search_requested.connect(self._on_knowledge_search_query)
+        self._window.knowledge_doc_delete_requested.connect(self._on_delete_knowledge_doc)
 
         # 定时任务管理
         self._window.cron_job_requested.connect(self._on_open_cron_job)
 
-        # 历史对话
+        # 历史对话（兼容旧代码，保留对话框方式）
         self._window.history_requested.connect(self._on_open_history)
+        # 历史对话TAB页面
+        self._window.history_refresh_requested.connect(self._on_refresh_history_tab)
+        self._window.history_session_selected.connect(self._restore_session)
+        self._window.history_session_delete_requested.connect(self._on_delete_history_session)
 
         # 设置模型列表（只显示可用的模型）
         models = self._model_registry.list_available_models() if self._model_registry else []
@@ -724,7 +740,7 @@ class WinClawGuiApp:
                 new_title = self._agent.session_manager.generate_title()
                 if new_title:
                     # 更新 UI 显示
-                    self._window._session_info.setText(new_title)
+                    self._window.set_session_info(new_title)
                     logger.info("会话标题已更新: %s", new_title)
         except Exception as e:
             logger.warning("更新会话标题失败: %s", e)
@@ -1342,7 +1358,7 @@ class WinClawGuiApp:
 
         # 清空聊天区域并填充历史消息
         self._window._chat_widget.clear()
-        self._window._session_info.setText(session.title)
+        self._window.set_session_info(session.title)
 
         for msg in session.messages:
             role = msg.get("role", "")
@@ -1354,6 +1370,70 @@ class WinClawGuiApp:
             # system / tool 消息不显示
 
         self._window.add_tool_log(f"📋 已恢复对话: {session.title}")
+
+    # ===== 历史对话TAB相关 =====
+
+    def _on_refresh_history_tab(self) -> None:
+        """刷新历史对话TAB页面数据。"""
+        if not self._window or not self._agent:
+            return
+
+        storage = self._get_storage()
+        sessions_data: list[dict] = []
+
+        if storage:
+            try:
+                # 同步读取全部历史会话
+                stored_sessions = storage.list_sessions_sync(limit=100)
+                for st in stored_sessions:
+                    msg_count = storage.get_message_count_sync(st.id)
+                    sessions_data.append({
+                        "id": st.id,
+                        "title": st.title,
+                        "updated_at": st.updated_at.isoformat(),
+                        "message_count": msg_count,
+                    })
+            except Exception as e:
+                logger.warning("读取历史会话列表失败: %s", e, exc_info=True)
+        else:
+            # 无持久化存储，只显示内存中的会话
+            session_mgr = self._agent.session_manager
+            for s in session_mgr.list_sessions():
+                msg_count = sum(
+                    1 for m in s.messages if m.get("role") != "system"
+                )
+                sessions_data.append({
+                    "id": s.id,
+                    "title": s.title,
+                    "updated_at": s.created_at.isoformat(),
+                    "message_count": msg_count,
+                })
+
+        # 更新TAB页面
+        self._window.update_history_sessions(sessions_data)
+
+    def _on_delete_history_session(self, session_id: str) -> None:
+        """删除历史会话。"""
+        if not self._agent:
+            return
+
+        storage = self._get_storage()
+        session_mgr = self._agent.session_manager
+
+        # 从存储中删除
+        if storage:
+            try:
+                storage.delete_session_sync(session_id)
+                logger.info("已从存储删除会话: %s", session_id)
+            except Exception as e:
+                logger.warning("删除会话存储失败: %s", e)
+
+        # 从内存中移除
+        if session_id in session_mgr._sessions:
+            del session_mgr._sessions[session_id]
+            logger.info("已从内存移除会话: %s", session_id)
+
+        self._window.add_tool_log(f"🗑️ 已删除对话: {session_id[:8]}...")
 
     # ===== 生成空间相关 =====
 
@@ -1385,6 +1465,9 @@ class WinClawGuiApp:
                 self._window.update_generated_space_count(
                     self._generated_files_manager.count
                 )
+                # 更新TAB页面的文件列表
+                files = list(self._generated_files_manager.files)
+                self._window.update_generated_space_files(files)
                 self._window.add_tool_log(
                     f"📂 已记录生成文件: {info.name} ({info.size_display()})"
                 )
@@ -1392,22 +1475,54 @@ class WinClawGuiApp:
         event_bus.on("file_generated", on_file_generated)
 
     def _on_open_generated_space(self) -> None:
-        """打开生成空间对话框。"""
+        """打开生成空间TAB页面（懒加载）。"""
         if not self._window:
             return
 
-        from .generated_space import GeneratedSpaceDialog
+        # 切换到生成空间TAB
+        self._window.switch_to_generated_space_tab()
 
-        dlg = GeneratedSpaceDialog(self._generated_files_manager, self._window)
-        dlg.exec()
+        # 懒加载：只在首次切换时扫描和加载
+        if not hasattr(self, '_gen_space_loaded') or not self._gen_space_loaded:
+            self._gen_space_loaded = True
+            # 扫描已有文件
+            try:
+                scanned_count = self._generated_files_manager.scan_existing_files()
+                if scanned_count > 0:
+                    logger.info("生成空间扫描到 %d 个历史文件", scanned_count)
+            except Exception as e:
+                logger.warning("扫描生成空间失败: %s", e)
+        
+        # 更新TAB页面的文件列表
+        try:
+            files = list(self._generated_files_manager.files)
+            self._window.update_generated_space_files(files)
+            self._window.update_generated_space_count(self._generated_files_manager.count)
+        except Exception as e:
+            logger.warning("更新生成空间显示失败: %s", e)
 
-        # 对话框关闭后更新按钮计数
-        self._window.update_generated_space_count(
-            self._generated_files_manager.count
-        )
+    def _on_clear_generated_space(self) -> None:
+        """清空生成空间记录。"""
+        try:
+            self._generated_files_manager.clear()
+            if self._window:
+                self._window.update_generated_space_count(0)
+            logger.info("已清空生成空间记录")
+        except Exception as e:
+            logger.warning("清空生成空间失败: %s", e)
+
+    def _on_delete_gen_file(self, file_path: str) -> None:
+        """删除单个生成文件记录。"""
+        try:
+            self._generated_files_manager.remove_file(file_path)
+            if self._window:
+                self._window.update_generated_space_count(self._generated_files_manager.count)
+            logger.info("已删除生成文件记录: %s", file_path)
+        except Exception as e:
+            logger.warning("删除生成文件记录失败: %s", e)
 
     def _on_open_knowledge_rag(self) -> None:
-        """打开知识库管理对话框。"""
+        """打开知识库TAB页面（懒加载）。"""
         if not self._window:
             return
 
@@ -1425,10 +1540,151 @@ class WinClawGuiApp:
             )
             return
 
-        from .knowledge_rag_dialog import KnowledgeRAGDialog
+        # 切换到知识库TAB
+        self._window.switch_to_knowledge_tab()
 
-        dlg = KnowledgeRAGDialog(tool, self._window)
-        dlg.exec()
+        # 懒加载：异步获取文档列表并更新TAB页面
+        self._refresh_knowledge_tab(tool)
+
+    def _refresh_knowledge_tab(self, tool) -> None:
+        """异步刷新知识库TAB页面。"""
+        from .knowledge_rag_dialog import ListDocumentsWorker
+
+        # 如果有正在运行的worker，等待它完成
+        try:
+            if self._knowledge_worker and hasattr(self._knowledge_worker, 'isRunning'):
+                if self._knowledge_worker.isRunning():
+                    self._knowledge_worker.wait(1000)  # 等待最多1秒
+        except RuntimeError:
+            # 对象已被删除，重置为None
+            self._knowledge_worker = None
+
+        def on_docs_loaded(docs):
+            if self._window:
+                self._window.update_knowledge_documents(docs)
+
+        self._knowledge_worker = ListDocumentsWorker(tool)
+        self._knowledge_worker.finished.connect(on_docs_loaded)
+        # 线程完成后自动删除并重置引用
+        def on_finished():
+            self._knowledge_worker = None
+        self._knowledge_worker.finished.connect(on_finished)
+        self._knowledge_worker.start()
+
+    def _on_add_knowledge_file(self, file_path: str) -> None:
+        """添加文件到知识库。"""
+        tool = self._tool_registry.get_tool("knowledge_rag") if self._tool_registry else None
+        if not tool:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self._window, "知识库未就绪", "知识库工具尚未加载")
+            return
+        
+        from .knowledge_rag_dialog import AddDocumentWorker
+        
+        # 显示进度
+        if self._window:
+            self._window.update_knowledge_progress(True, 0, "准备添加...")
+        
+        def on_progress(msg):
+            if self._window:
+                self._window.update_knowledge_progress(True, 50, msg)
+        
+        def on_finished(success, msg):
+            if self._window:
+                self._window.update_knowledge_progress(False)
+            from PySide6.QtWidgets import QMessageBox
+            if success:
+                QMessageBox.information(self._window, "成功", msg)
+                self._refresh_knowledge_tab(tool)
+            else:
+                QMessageBox.warning(self._window, "失败", msg)
+        
+        worker = AddDocumentWorker(tool, file_path=file_path)
+        worker.progress.connect(on_progress)
+        worker.finished.connect(on_finished)
+        worker.start()
+        # 保存worker引用防止被回收
+        self._add_doc_worker = worker
+
+    def _on_add_knowledge_url(self, url: str) -> None:
+        """添加URL到知识库。"""
+        tool = self._tool_registry.get_tool("knowledge_rag") if self._tool_registry else None
+        if not tool:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self._window, "知识库未就绪", "知识库工具尚未加载")
+            return
+        
+        from .knowledge_rag_dialog import AddDocumentWorker
+        
+        # 显示进度
+        if self._window:
+            self._window.update_knowledge_progress(True, 0, "准备抓取网页...")
+        
+        def on_progress(msg):
+            if self._window:
+                self._window.update_knowledge_progress(True, 50, msg)
+        
+        def on_finished(success, msg):
+            if self._window:
+                self._window.update_knowledge_progress(False)
+            from PySide6.QtWidgets import QMessageBox
+            if success:
+                QMessageBox.information(self._window, "成功", msg)
+                self._refresh_knowledge_tab(tool)
+            else:
+                QMessageBox.warning(self._window, "失败", msg)
+        
+        worker = AddDocumentWorker(tool, url=url)
+        worker.progress.connect(on_progress)
+        worker.finished.connect(on_finished)
+        worker.start()
+        self._add_doc_worker = worker
+
+    def _on_knowledge_search_query(self, query: str) -> None:
+        """搜索知识库。"""
+        tool = self._tool_registry.get_tool("knowledge_rag") if self._tool_registry else None
+        if not tool:
+            if self._window:
+                self._window.update_knowledge_search_result("知识库未就绪")
+            return
+        
+        from .knowledge_rag_dialog import SearchWorker
+        
+        # 预加载模型（避免线程冲突）
+        try:
+            _ = tool.embedder.model
+        except Exception:
+            pass
+        
+        def on_search_finished(result):
+            if self._window:
+                self._window.update_knowledge_search_result(result)
+        
+        worker = SearchWorker(tool, query, top_k=3)
+        worker.finished.connect(on_search_finished)
+        worker.start()
+        self._search_worker = worker
+
+    def _on_delete_knowledge_doc(self, doc_id: int) -> None:
+        """删除知识库文档。"""
+        tool = self._tool_registry.get_tool("knowledge_rag") if self._tool_registry else None
+        if not tool:
+            return
+        
+        from .knowledge_rag_dialog import DeleteDocumentWorker
+        
+        def on_delete_finished(success, msg):
+            from PySide6.QtWidgets import QMessageBox
+            if success:
+                QMessageBox.information(self._window, "成功", msg)
+                self._refresh_knowledge_tab(tool)
+            else:
+                QMessageBox.warning(self._window, "失败", msg)
+        
+        worker = DeleteDocumentWorker(tool, doc_id)
+        worker.finished.connect(on_delete_finished)
+        worker.start()
+        self._delete_doc_worker = worker
 
     def _on_open_cron_job(self) -> None:
         """打开定时任务管理对话框。"""
@@ -1926,7 +2182,7 @@ def main() -> int:
     setup_logging_from_config(config_dict)
     
     logger = logging.getLogger(__name__)
-    logger.info("WinClaw GUI 启动...")
+    logger.info("WeClaw GUI 启动...")
     
     app = WinClawGuiApp()
     return app.run()

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QThread
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -48,6 +48,46 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+class DeviceStatusLoader(QThread):
+    """后台线程加载设备状态。"""
+    finished = Signal(object)  # 成功时发送 device_info
+    failed = Signal(str)  # 失败时发送错误信息
+    
+    def __init__(self, server_url: str, access_token: str | None, parent=None):
+        super().__init__(parent)
+        self.server_url = server_url
+        self.access_token = access_token
+        self.setObjectName("DeviceStatusLoader")
+        self._is_cancelled = False
+        
+    def run(self):
+        if self._is_cancelled:
+            return
+        try:
+            from src.remote_client.device_binder import DeviceBindClient
+            import asyncio
+            
+            binder = DeviceBindClient(self.server_url)
+            if self.access_token:
+                binder.set_token(self.access_token)
+            
+            # 异步执行查询
+            async def do_query():
+                return await binder.get_device_info()
+            
+            if self._is_cancelled:
+                return
+            result = asyncio.run(do_query())
+            if not self._is_cancelled:
+                self.finished.emit(result)
+        except Exception as e:
+            if not self._is_cancelled:
+                self.failed.emit(str(e))
+    
+    def cancel(self):
+        self._is_cancelled = True
 
 
 class SettingsDialog(QDialog):
@@ -89,9 +129,13 @@ class SettingsDialog(QDialog):
         self._current_whisper_model = current_whisper_model
         self._mcp_manager = mcp_manager
         self._key_edits: dict[str, QLineEdit] = {}
+        self._ui_initialized = False
+        self._is_closing = False  # 标记对话框是否正在关闭
         self._setup_ui()
-        # 延迟加载设备状态
-        self._load_device_status()
+        self._ui_initialized = True
+        
+        # ⚠️ 不在 __init__ 中启动后台任务，而是在 showEvent 中启动
+        # 这样可以确保对话框完全显示后再执行，避免线程生命周期问题
 
     def _setup_ui(self) -> None:
         """构建 UI。"""
@@ -101,7 +145,7 @@ class SettingsDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # 选项卡
+        # 选项卡 - 直接创建所有内容（恢复原始方式）
         tabs = QTabWidget()
         tabs.addTab(self._create_apikey_tab(), tr("API 密钥"))
         tabs.addTab(self._create_general_tab(), tr("通用"))
@@ -109,6 +153,11 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._create_mcp_tab(), "MCP")
         tabs.addTab(self._create_update_tab(), tr("更新"))
         layout.addWidget(tabs)
+        
+        # 初始化异步任务
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, self._initialize_api_keys)  # API Key 延迟加载
+        QTimer.singleShot(100, self._initialize_background_tasks)  # 其他后台任务
 
         # 按钮
         btn_layout = QHBoxLayout()
@@ -136,23 +185,18 @@ class SettingsDialog(QDialog):
         group = QGroupBox("API 密钥管理")
         form = QFormLayout(group)
 
-        for entry in API_KEY_ENTRIES:
+        for idx, entry in enumerate(API_KEY_ENTRIES):
             env_var = entry["env"]
             label_text = entry["label"]
 
             row = QHBoxLayout()
 
-            # 密钥输入框
+            # 密钥输入框 - 先创建空输入框，稍后异步加载已保存的值
             edit = QLineEdit()
             edit.setPlaceholderText(entry["hint"])
             edit.setEchoMode(QLineEdit.EchoMode.Password)
-
-            # 如果已存储，显示遮蔽值
-            stored = load_key(env_var)
-            if stored:
-                edit.setText(stored)
-                edit.setPlaceholderText(tr("已存储") + " " + mask_key(stored))
-
+            
+            # 保存到字典供后续加载
             self._key_edits[env_var] = edit
             row.addWidget(edit, stretch=1)
 
@@ -222,7 +266,30 @@ class SettingsDialog(QDialog):
         layout.addWidget(group)
         layout.addStretch()
         return widget
+    
+    def _initialize_api_keys(self) -> None:
+        """初始化 API Key 加载（在对话框显示后调用）。"""
+        from PySide6.QtCore import QTimer
+        
+        for idx, entry in enumerate(API_KEY_ENTRIES):
+            env_var = entry["env"]
+            edit = self._key_edits.get(env_var)
+            if edit:
+                QTimer.singleShot(
+                    30 + idx * 20,  # 错开加载时间
+                    lambda ev=env_var, e=edit: self._load_api_key_async(ev, e)
+                )
 
+    def _load_api_key_async(self, env_var: str, edit: QLineEdit) -> None:
+        """异步加载 API Key（不阻塞 UI）。"""
+        try:
+            stored = load_key(env_var)
+            if stored:
+                edit.setText(stored)
+                edit.setPlaceholderText(tr("已存储") + " " + mask_key(stored))
+        except Exception as e:
+            logger.debug(f"加载 {env_var} 失败：{e}")
+    
     def _toggle_echo(self, edit: QLineEdit) -> None:
         """切换密钥显示/隐藏。"""
         if edit.echoMode() == QLineEdit.EchoMode.Password:
@@ -456,17 +523,25 @@ class SettingsDialog(QDialog):
         remote_group = QGroupBox(tr("远程绑定"))
         remote_layout = QVBoxLayout(remote_group)
 
-        self._device_status_label = QLabel("未绑定设备")
+        # 绑定状态标签
+        self._device_status_label = QLabel("未绑定任何用户")
         self._device_status_label.setStyleSheet("font-size: 13px; color: gray;")
         remote_layout.addWidget(self._device_status_label)
+        
+        # Token 显示区域（初始隐藏）
+        self._token_display_label = QLabel("")
+        self._token_display_label.setStyleSheet("font-size: 11px; color: #666; font-family: 'Courier New', monospace;")
+        self._token_display_label.setWordWrap(True)
+        self._token_display_label.setVisible(False)
+        remote_layout.addWidget(self._token_display_label)
 
         device_btn_layout = QHBoxLayout()
 
-        self._bind_device_btn = QPushButton("绑定设备")
+        self._bind_device_btn = QPushButton("绑定用户")
         self._bind_device_btn.clicked.connect(self._on_bind_device)
         device_btn_layout.addWidget(self._bind_device_btn)
 
-        self._unbind_device_btn = QPushButton("解绑设备")
+        self._unbind_device_btn = QPushButton("解绑用户")
         self._unbind_device_btn.setEnabled(False)
         self._unbind_device_btn.clicked.connect(self._on_unbind_device)
         device_btn_layout.addWidget(self._unbind_device_btn)
@@ -482,9 +557,10 @@ class SettingsDialog(QDialog):
         info_text = QLabel(
             "通过远程绑定，您可以在其他设备上访问此 AI 助手。\n\n"
             "绑定步骤：\n"
-            "1. 访问服务器网站获取绑定 Token\n"
-            "2. 点击'绑定设备'按钮\n"
-            "3. 输入 Token 完成绑定\n\n"
+            "1. 访问服务器网站注册并登录账号\n"
+            "2. 在 PWA 端生成绑定 Token\n"
+            "3. 点击'绑定用户'按钮\n"
+            "4. 输入 Token 完成绑定\n\n"
             "绑定后，您可以使用手机、平板等设备\n"
             "通过网络远程使用 WinClaw。"
         )
@@ -501,11 +577,22 @@ class SettingsDialog(QDialog):
     # ----------------------------------------------------------------
     
     def _on_bind_device(self) -> None:
-        """绑定设备。"""
+        """绑定用户。"""
         from .device_bind_dialog import DeviceBindDialog
         from src.remote_client.device_fingerprint import get_device_fingerprint
         from src.remote_client.device_binder import DeviceBindClient
         import asyncio
+        
+        # 如果已绑定，需要确认重新绑定
+        if self._unbind_device_btn.isEnabled():
+            reply = QMessageBox.question(
+                self,
+                "确认重新绑定",
+                "当前已绑定用户。\n\n重新绑定将会解除当前绑定，确定要继续吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
     
         dialog = DeviceBindDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -549,65 +636,65 @@ class SettingsDialog(QDialog):
                 self._update_device_status(device_info)
                     
                 # 通知主程序重新连接
-                logger.info("设备绑定成功，将重新建立远程连接")
+                logger.info("用户绑定成功，将重新建立远程连接")
             else:
                 # 绑定失败
                 dialog.set_loading(False)
                 dialog.show_error("绑定失败，请检查 Token 是否正确或服务器是否在线")
     
         except Exception as e:
-            logger.error(f"绑定设备失败：{e}", exc_info=True)
+            logger.error(f"绑定用户失败：{e}", exc_info=True)
             dialog.set_loading(False)
             dialog.show_error(f"绑定失败：{str(e)}")
     
     def _on_unbind_device(self) -> None:
-        """解绑设备。"""
+        """解绑用户。"""
         from src.remote_client.device_binder import DeviceBindClient
         from .keystore import delete_key
         import asyncio
-    
+        
         reply = QMessageBox.question(
             self,
             "确认解绑",
-            "确定要解绑当前设备吗？\n\n解绑后需要重新生成 Token 才能再次绑定。",
+            "确定要解绑当前用户吗？\n\n解绑后需要重新生成 Token 才能再次绑定。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-    
+        
         if reply != QMessageBox.StandardButton.Yes:
             return
-    
+        
         try:
             server_url = self._get_server_url()
             binder = DeviceBindClient(server_url)
-            
+                
             # ✅ 从存储中加载 JWT Token
             access_token = load_key("WECLAW_ACCESS_TOKEN")
             if access_token:
                 binder.set_token(access_token)
-
+    
             # 异步执行解绑
             async def do_unbind():
                 return await binder.unbind_device()
-
+    
             # 在后台线程运行
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(lambda: asyncio.run(do_unbind()))
                 success = future.result(timeout=30)
-
+    
             if success:
                 # ✅ 清除保存的 Token
                 delete_key("WECLAW_ACCESS_TOKEN")
                 delete_key("WECLAW_REFRESH_TOKEN")
                 logger.info("已清除保存的 JWT Token")
-                
-                QMessageBox.information(self, "解绑成功", "设备已成功解绑")
+                    
+                QMessageBox.information(self, "解绑成功", "用户已成功解绑")
                 self._clear_device_status()
             else:
                 QMessageBox.warning(self, "解绑失败", "解绑失败，请稍后重试")
-    
+        
         except Exception as e:
-            logger.error(f"解绑设备失败：{e}", exc_info=True)
+            logger.error(f"解绑用户失败：{e}", exc_info=True)
             QMessageBox.critical(self, "解绑失败", f"解绑失败：{str(e)}")
     
     def _get_server_url(self) -> str:
@@ -647,53 +734,123 @@ class SettingsDialog(QDialog):
         return "http://localhost:8000"
     
     def _update_device_status(self, device_info) -> None:
-        """更新设备状态显示。"""
-        self._device_status_label.setText(
-            f"✅ 已绑定：{device_info.device_name} ({device_info.device_id[:16]}...)"
-        )
-        self._bind_device_btn.setEnabled(False)
+        """更新绑定状态显示。"""
+        # 显示用户名（优先）或设备名
+        username = getattr(device_info, 'username', None) or device_info.device_name
+        self._device_status_label.setText(f"✅ 已绑定用户：{username}")
+        self._device_status_label.setStyleSheet("font-size: 13px; color: green;")
+        
+        # 显示 Token 信息（脱敏显示）
+        access_token = load_key("WECLAW_ACCESS_TOKEN")
+        if access_token:
+            masked_token = access_token[:16] + "..." + access_token[-8:] if len(access_token) > 24 else access_token
+            self._token_display_label.setText(f"Token: {masked_token}")
+            self._token_display_label.setVisible(True)
+        else:
+            self._token_display_label.setVisible(False)
+        
+        # 按钮状态：已绑定时显示"重新绑定"，启用解绑按钮
+        self._bind_device_btn.setText("重新绑定")
+        self._bind_device_btn.setEnabled(True)
         self._unbind_device_btn.setEnabled(True)
     
     def _clear_device_status(self) -> None:
-        """清除设备状态显示。"""
-        self._device_status_label.setText("未绑定设备")
+        """清除绑定状态显示。"""
+        self._device_status_label.setText("未绑定任何用户")
+        self._device_status_label.setStyleSheet("font-size: 13px; color: gray;")
+        self._token_display_label.setText("")
+        self._token_display_label.setVisible(False)
+        
+        # 按钮状态：未绑定时显示"绑定用户"，禁用解绑按钮
+        self._bind_device_btn.setText("绑定用户")
         self._bind_device_btn.setEnabled(True)
         self._unbind_device_btn.setEnabled(False)
 
-    def _load_device_status(self) -> None:
-        """加载设备状态。"""
-        from src.remote_client.device_binder import DeviceBindClient
-        from .keystore import load_key
-        import asyncio
-
-        try:
-            server_url = self._get_server_url()
-            binder = DeviceBindClient(server_url)
-            
-            # ✅ 从存储中加载 JWT Token
-            access_token = load_key("WECLAW_ACCESS_TOKEN")
-            if access_token:
-                binder.set_token(access_token)
-                logger.info("已加载保存的 JWT Token")
-
-            # 异步执行查询
-            async def do_query():
-                return await binder.get_device_info()
-
-            # 在后台线程运行
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(lambda: asyncio.run(do_query()))
-                device_info = future.result(timeout=10)
-
-            if device_info and device_info.status == "active":
-                self._update_device_status(device_info)
-            else:
-                self._clear_device_status()
-
-        except Exception as e:
-            logger.warning(f"加载设备状态失败：{e}")
+    def _initialize_background_tasks(self) -> None:
+        """初始化后台任务（不阻塞 UI）。"""
+        if not self._ui_initialized:
+            return
+        
+        # 如果已经在加载或已关闭，不重复加载
+        if self._is_closing:
+            return
+        
+        # 如果已有线程在运行，不重复创建
+        if hasattr(self, '_device_loader') and self._device_loader is not None:
+            return
+        
+        # 初始化线程引用
+        self._device_loader = None
+        
+        # 异步加载设备状态
+        self._load_device_status_async()
+    
+    def _load_device_status_async(self) -> None:
+        """异步加载设备状态（不阻塞 UI）。"""
+        server_url = self._get_server_url()
+        access_token = load_key("WECLAW_ACCESS_TOKEN")
+        
+        # 检查对话框是否仍然有效且未关闭
+        if not self._ui_initialized or self._is_closing:
+            return
+        
+        # 创建线程，设置 parent 为 self，让 Qt 管理生命周期
+        self._device_loader = DeviceStatusLoader(server_url, access_token, parent=self)
+        self._device_loader.finished.connect(self._on_device_status_loaded, Qt.ConnectionType.QueuedConnection)
+        self._device_loader.failed.connect(self._on_device_status_failed, Qt.ConnectionType.QueuedConnection)
+        self._device_loader.start()
+    
+    def _on_device_status_loaded(self, device_info) -> None:
+        """设备状态加载完成回调。"""
+        # 检查对话框是否仍然有效
+        if self._is_closing:
+            return
+        if device_info and device_info.status == "active":
+            self._update_device_status(device_info)
+        else:
             self._clear_device_status()
+    
+    def _on_device_status_failed(self, error: str) -> None:
+        """设备状态加载失败回调。"""
+        # 检查对话框是否仍然有效
+        if self._is_closing:
+            return
+        logger.warning(f"异步加载设备状态失败：{error}")
+        self._clear_device_status()
+    
+    def closeEvent(self, event) -> None:
+        """对话框关闭时清理后台线程。"""
+        # 标记为关闭状态，防止回调执行
+        self._is_closing = True
+        
+        # 等待设备状态加载线程结束
+        if hasattr(self, '_device_loader') and self._device_loader is not None:
+            loader = self._device_loader
+            if loader.isRunning():
+                loader.cancel()
+                # 等待线程结束（最多 2 秒）
+                if not loader.wait(2000):
+                    logger.warning("设备状态加载线程未能在超时内结束，强制终止")
+                    loader.terminate()
+                    loader.wait(500)
+        
+        super().closeEvent(event)
+    
+    def showEvent(self, event) -> None:
+        """对话框显示后启动后台任务。"""
+        super().showEvent(event)
+        
+        # 防止重复调用
+        if not hasattr(self, '_background_tasks_started'):
+            self._background_tasks_started = True
+            # 延迟 100ms 启动后台任务，确保对话框完全渲染
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self._initialize_background_tasks)
+        
+    def _load_device_status(self) -> None:
+        """[已废弃] 同步加载设备状态（会阻塞 UI），请使用 _load_device_status_async。"""
+        # 保留此方法用于兼容性，但不再使用
+        logger.debug("_load_device_status 已废弃，请使用 _load_device_status_async")
     
     # ----------------------------------------------------------------
     # MCP 扩展选项卡（Phase 4.2）
@@ -726,8 +883,9 @@ class SettingsDialog(QDialog):
         self._mcp_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         servers_layout.addWidget(self._mcp_table)
 
-        # 加载 MCP 配置
-        self._load_mcp_servers()
+        # 异步加载 MCP 配置，避免阻塞 UI
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, self._load_mcp_servers)  # 50ms 后加载
 
         layout.addWidget(servers_group)
 
@@ -849,15 +1007,18 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # 版本信息
+        # 版本信息 - 延迟加载版本号，避免导入耗时
         version_group = QGroupBox("版本信息")
         version_layout = QFormLayout(version_group)
         
-        from src.updater.github_updater import get_current_version
-        current_version = get_current_version()
+        self._version_label = QLabel("<b>加载中...</b>")
+        version_layout.addRow("当前版本:", self._version_label)
         
-        version_label = QLabel(f"<b>{current_version}</b>")
-        version_layout.addRow("当前版本:", version_label)
+        # 异步加载版本号（不阻塞 UI）
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, self._load_version_info)  # 100ms 后加载
+        
+        layout.addWidget(version_group)
         
         layout.addWidget(version_group)
         
@@ -882,9 +1043,9 @@ class SettingsDialog(QDialog):
         about_layout = QVBoxLayout(about_group)
         
         about_text = QLabel(
-            "WinClaw - Windows AI 助手\n"
+            "WeClaw - 你的 AI 桌面管家\n"
             "基于大语言模型的智能桌面助手\n\n"
-            "GitHub: https://github.com/wyg5208/WinClaw"
+            "GitHub: https://github.com/wyg5208/weclaw"
         )
         about_text.setWordWrap(True)
         about_layout.addWidget(about_text)
@@ -894,36 +1055,46 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return widget
     
+    def _load_version_info(self) -> None:
+        """异步加载版本信息（不阻塞 UI）。"""
+        try:
+            from src.updater.github_updater import get_current_version
+            current_version = get_current_version()
+            self._version_label.setText(f"<b>{current_version}</b>")
+        except Exception as e:
+            logger.debug(f"加载版本信息失败：{e}")
+            self._version_label.setText("<b>未知</b>")
+        
     def _on_check_update(self) -> None:
         """检查更新。"""
         self._update_status.setText("正在检查更新...")
-        
+            
         # 在后台线程检查
         import asyncio
         from concurrent.futures import ThreadPoolExecutor
-        
+            
         def check_in_thread():
             try:
                 from src.updater.github_updater import check_for_updates, get_current_version
-                
+                    
                 async def do_check():
                     return await check_for_updates()
-                
+                    
                 return asyncio.run(do_check())
             except Exception as e:
                 return str(e)
-        
+            
         # 简化处理：直接显示状态
         # 实际应用中应该使用 QThread
         try:
             from src.updater.github_updater import get_current_version
             current = get_current_version()
-            
+                
             # 显示当前状态
             self._update_status.setText(
-                f"当前版本: {current}\n"
-                "提示: 完整的更新检查需要网络连接\n"
+                f"当前版本：{current}\n"
+                "提示：完整的更新检查需要网络连接\n"
                 "请访问 GitHub 查看最新版本"
             )
         except Exception as e:
-            self._update_status.setText(f"检查失败: {e}")
+            self._update_status.setText(f"检查失败：{e}")

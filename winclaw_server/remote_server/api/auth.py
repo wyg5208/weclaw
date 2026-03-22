@@ -332,6 +332,9 @@ class DeviceInfoResponse(BaseModel):
     bound_at: str
     last_connected: Optional[str]
     status: str
+    username: Optional[str] = None  # 绑定的用户名
+    is_online: Optional[bool] = None  # 设备在线状态
+    connection_details: Optional[dict] = None  # 连接详情
 
 
 @router.post("/binding-token", response_model=BindingTokenResponse, summary="生成设备绑定 Token")
@@ -474,6 +477,7 @@ async def get_device_info(user_info: dict = Depends(get_current_user_with_db)):
     # 注意：保留数据库中的 status 值（'active'），用 is_online 表示在线状态
     # 前端通过 hasDevice = status === 'active' 判断是否绑定
     device_info["is_online"] = is_online
+    device_info["username"] = user.username  # 添加用户名到返回结果
     # 不覆盖 status 字段，保持数据库中的值（'active' 或其他）
     if connection_details:
         device_info["connection_details"] = connection_details

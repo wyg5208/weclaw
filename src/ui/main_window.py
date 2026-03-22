@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QSizePolicy,
     QStatusBar,
+    QTabWidget,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -108,10 +110,19 @@ class MainWindow(QMainWindow):
     voice_stop_requested = Signal()  # 请求停止录音
     tts_toggle_requested = Signal(bool)  # 请求切换 TTS
     generated_space_requested = Signal()  # 打开生成空间
+    generated_space_clear_requested = Signal()  # 清空生成空间记录
+    generated_space_file_delete_requested = Signal(str)  # 删除单个生成文件记录(路径)
     knowledge_rag_requested = Signal()  # 打开知识库
+    knowledge_add_file_requested = Signal(str)  # 添加文件到知识库
+    knowledge_add_url_requested = Signal(str)  # 添加URL到知识库
+    knowledge_search_requested = Signal(str)  # 搜索知识库
+    knowledge_doc_delete_requested = Signal(int)  # 删除知识库文档(doc_id)
     cron_job_requested = Signal()  # 打开定时任务管理
     stop_requested = Signal()  # 请求停止当前任务
-    history_requested = Signal()  # 打开历史对话
+    history_requested = Signal()  # 打开历史对话（兼容旧代码）
+    history_refresh_requested = Signal()  # 刷新历史对话列表
+    history_session_selected = Signal(str)  # 选择历史会话(session_id)
+    history_session_delete_requested = Signal(str)  # 删除历史会话(session_id)
     conversation_mode_changed = Signal(str)  # 对话模式切换 (off/continuous/wake_word)
     conversation_state_changed = Signal(str)  # 对话状态变化 (idle/listening/chatting/thinking/speaking)
     theme_changed = Signal(str)  # 主题切换 (light/dark/system)
@@ -582,7 +593,7 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self) -> None:
         """设置窗口属性。"""
-        self.setWindowTitle(f"WinClaw - {tr('AI 助手')}")
+        self.setWindowTitle(f"WeClaw - {tr('AI 助手')}")
         self.setMinimumSize(900, 375)
         self.resize(1200, 600)
         self._setup_window_icon()
@@ -624,7 +635,7 @@ class MainWindow(QMainWindow):
     def reload_ui(self) -> None:
         """重新加载 UI（语言切换后调用）。"""
         # 重新设置窗口标题
-        self.setWindowTitle(f"WinClaw - {tr('AI 助手')}")
+        self.setWindowTitle(f"WeClaw - {tr('AI 助手')}")
 
         # 重建菜单栏
         menubar = self.menuBar()
@@ -862,13 +873,6 @@ class MainWindow(QMainWindow):
         copy_chat_btn.clicked.connect(self._on_copy_chat)
         toolbar.addWidget(copy_chat_btn)
 
-        # 历史对话按钮
-        history_btn = QPushButton(tr("📋 历史对话"))
-        history_btn.setToolTip(tr("查看历史对话记录") + " (Ctrl+H)")
-        history_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px;")
-        history_btn.clicked.connect(self._on_history)
-        toolbar.addWidget(history_btn)
-
         toolbar.addSeparator()
 
         # 清空按钮
@@ -916,21 +920,7 @@ class MainWindow(QMainWindow):
         self._conversation_status_label.setVisible(False)
         toolbar.addWidget(self._conversation_status_label)
 
-        toolbar.addSeparator()
-
-        # 生成空间按钮
-        self._gen_space_btn = QPushButton(tr("📂 生成空间"))
-        self._gen_space_btn.setToolTip(tr("查看 AI 生成的所有文件"))
-        self._gen_space_btn.clicked.connect(self._on_generated_space)
-        toolbar.addWidget(self._gen_space_btn)
-
-        # 知识库按钮
-        self._knowledge_btn = QPushButton(tr("🧠 知识库"))
-        self._knowledge_btn.setToolTip(tr("管理知识库文档") + " (Ctrl+K)")
-        self._knowledge_btn.clicked.connect(self._on_knowledge_rag)
-        toolbar.addWidget(self._knowledge_btn)
-
-        # 生成空间文件计数徽标
+        # 生成空间文件计数徽标（保留用于TAB页面更新）
         self._gen_space_count = 0
 
     def _setup_central_widget(self) -> None:
@@ -1122,25 +1112,59 @@ class MainWindow(QMainWindow):
         return widget
 
     def _create_status_panel(self) -> QWidget:
-        """创建右侧状态面板（P2-11 增强版）。"""
+        """创建右侧状态面板（TAB页面模式）。"""
         widget = QWidget()
-        widget.setMinimumWidth(300)  # 初始宽度翻倍
-        widget.setMaximumWidth(500)  # 最大宽度翻倍
+        widget.setMinimumWidth(300)  # 初始宽度
+        widget.setMaximumWidth(500)  # 最大宽度
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(0)
 
-        # 会话信息
-        session_group = QGroupBox("当前会话")
-        session_layout = QVBoxLayout(session_group)
+        # 创建TAB控件
+        self._right_tab_widget = QTabWidget()
+        self._right_tab_widget.setDocumentMode(True)  # 更现代的TAB样式
+        layout.addWidget(self._right_tab_widget)
+
+        # TAB 1: 工具执行状态
+        tools_tab = self._create_tools_status_tab()
+        self._right_tab_widget.addTab(tools_tab, tr("🔧 工具状态"))
+
+        # TAB 2: 生成空间
+        gen_space_tab = self._create_generated_space_tab()
+        self._right_tab_widget.addTab(gen_space_tab, tr("📂 生成空间"))
+
+        # TAB 3: 知识库
+        knowledge_tab = self._create_knowledge_tab()
+        self._right_tab_widget.addTab(knowledge_tab, tr("🧠 知识库"))
+
+        # TAB 4: 历史对话
+        history_tab = self._create_history_tab()
+        self._right_tab_widget.addTab(history_tab, tr("📋 历史"))
+
+        # 保留 _session_info 用于兼容现有代码（隐藏的）
         self._session_info = QLabel("新会话")
-        self._session_info.setWordWrap(True)
-        session_layout.addWidget(self._session_info)
-        layout.addWidget(session_group)
+        self._session_info.setVisible(False)
 
-        # 工具执行状态（P2-11 新增实时日志）
-        tools_group = QGroupBox("工具执行状态")
-        tools_layout = QVBoxLayout(tools_group)
+        # TAB切换事件（延迟连接，避免初始化时触发）
+        QTimer.singleShot(100, lambda: self._right_tab_widget.currentChanged.connect(self._on_tab_changed))
+
+        return widget
+
+    def _on_tab_changed(self, index: int) -> None:
+        """TAB切换事件处理（懒加载）。"""
+        if index == 1:  # 生成空间TAB
+            self.generated_space_requested.emit()
+        elif index == 2:  # 知识库TAB
+            self.knowledge_rag_requested.emit()
+        elif index == 3:  # 历史对话TAB
+            self.history_refresh_requested.emit()
+
+    def _create_tools_status_tab(self) -> QWidget:
+        """创建工具执行状态TAB页面。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
         # 标题行：状态 + 复制按钮
         header_layout = QHBoxLayout()
@@ -1153,14 +1177,14 @@ class MainWindow(QMainWindow):
         copy_tools_btn.setStyleSheet("font-size: 10px; border: none; padding: 2px;")
         copy_tools_btn.clicked.connect(self._copy_tool_status)
         header_layout.addWidget(copy_tools_btn)
-        tools_layout.addLayout(header_layout)
+        layout.addLayout(header_layout)
 
         # 进度条
         self._tool_progress = QProgressBar()
         self._tool_progress.setRange(0, 0)  # 不确定进度
         self._tool_progress.setMaximumHeight(6)
         self._tool_progress.setVisible(False)
-        tools_layout.addWidget(self._tool_progress)
+        layout.addWidget(self._tool_progress)
 
         # 工具执行日志滚动区
         self._tool_log = QLabel("")
@@ -1170,14 +1194,330 @@ class MainWindow(QMainWindow):
 
         self._tool_log_scroll = QScrollArea()
         self._tool_log_scroll.setWidgetResizable(True)
-        # 使用整数值兼容不同 PySide6 版本
         self._tool_log_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._tool_log_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._tool_log_scroll.setMinimumHeight(80)  # 最小高度
+        self._tool_log_scroll.setMinimumHeight(80)
         self._tool_log_scroll.setWidget(self._tool_log)
-        tools_layout.addWidget(self._tool_log_scroll, stretch=1)  # 滚动区占用工具组的剩余空间
+        layout.addWidget(self._tool_log_scroll, stretch=1)
+
+        return widget
+
+    def _create_generated_space_tab(self) -> QWidget:
+        """创建生成空间TAB页面（完整功能）。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # 标题行
+        header_layout = QHBoxLayout()
+        title_label = QLabel(tr("📂 生成空间"))
+        title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
         
-        layout.addWidget(tools_group)
+        # 打开文件夹按钮
+        self._gen_open_folder_btn = QPushButton(tr("📁"))
+        self._gen_open_folder_btn.setToolTip(tr("打开生成空间文件夹"))
+        self._gen_open_folder_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 28px; max-width: 32px;")
+        self._gen_open_folder_btn.clicked.connect(self._on_open_generated_space_folder)
+        header_layout.addWidget(self._gen_open_folder_btn)
+        layout.addLayout(header_layout)
+
+        # 文件计数+摘要标签
+        self._gen_space_count_label = QLabel(tr("0 个文件"))
+        self._gen_space_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(self._gen_space_count_label)
+
+        # 搜索+筛选+排序行（合并为一行）
+        search_layout = QHBoxLayout()
+        search_layout.setSpacing(4)
+        self._gen_search_input = QLineEdit()
+        self._gen_search_input.setPlaceholderText(tr("搜索..."))
+        self._gen_search_input.textChanged.connect(self._on_gen_filter_changed)
+        search_layout.addWidget(self._gen_search_input, stretch=1)
+        
+        # 筛选器
+        self._gen_filter_combo = QComboBox()
+        self._gen_filter_combo.addItems([tr("全部"), tr("文档"), tr("图片"), tr("代码"), tr("其他")])
+        self._gen_filter_combo.setFixedWidth(60)
+        self._gen_filter_combo.currentTextChanged.connect(self._on_gen_filter_changed)
+        search_layout.addWidget(self._gen_filter_combo)
+        
+        # 排序器
+        self._gen_sort_combo = QComboBox()
+        self._gen_sort_combo.addItems([
+            tr("时间↓"), tr("时间↑"), tr("名称↓"), tr("名称↑"), tr("大小↓"), tr("大小↑")
+        ])
+        self._gen_sort_combo.setFixedWidth(60)
+        self._gen_sort_combo.currentTextChanged.connect(self._on_gen_filter_changed)
+        search_layout.addWidget(self._gen_sort_combo)
+        
+        layout.addLayout(search_layout)
+
+        # 文件列表滚动区域
+        self._gen_space_scroll = QScrollArea()
+        self._gen_space_scroll.setWidgetResizable(True)
+        self._gen_space_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._gen_space_list_widget = QWidget()
+        self._gen_space_list_layout = QVBoxLayout(self._gen_space_list_widget)
+        self._gen_space_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._gen_space_list_layout.setSpacing(4)
+
+        self._gen_space_scroll.setWidget(self._gen_space_list_widget)
+        layout.addWidget(self._gen_space_scroll, stretch=1)
+
+        # 空状态提示
+        self._gen_space_empty_label = QLabel(
+            tr("🎉 尚未生成任何文件\n\n当 AI 创建文件时，\n会自动出现在这里。")
+        )
+        self._gen_space_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._gen_space_empty_label.setStyleSheet("color: gray; font-size: 11px; padding: 15px;")
+        self._gen_space_empty_label.setWordWrap(True)
+        self._gen_space_list_layout.addWidget(self._gen_space_empty_label)
+        self._gen_space_list_layout.addStretch()
+
+        # 底部按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+        
+        refresh_gen_btn = QPushButton(tr("刷新"))
+        refresh_gen_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 45px; max-width: 55px;")
+        refresh_gen_btn.clicked.connect(self._on_refresh_generated_space)
+        btn_layout.addWidget(refresh_gen_btn)
+        
+        btn_layout.addStretch()
+        
+        # 清空记录按钮
+        self._gen_clear_btn = QPushButton(tr("清空"))
+        self._gen_clear_btn.setToolTip(tr("清空所有生成记录（不删除文件）"))
+        self._gen_clear_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 45px; max-width: 55px;")
+        self._gen_clear_btn.clicked.connect(self._on_clear_generated_space)
+        btn_layout.addWidget(self._gen_clear_btn)
+        
+        layout.addLayout(btn_layout)
+
+        # 保存所有文件用于筛选排序
+        self._gen_all_files: list = []
+
+        return widget
+
+    def _create_knowledge_tab(self) -> QWidget:
+        """创建知识库TAB页面（完整功能）。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # 标题行（含进度条）
+        header_layout = QHBoxLayout()
+        title_label = QLabel(tr("🧠 知识库"))
+        title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header_layout.addWidget(title_label)
+        
+        # 进度条（放在标题右侧）
+        self._knowledge_progress = QProgressBar()
+        self._knowledge_progress.setVisible(False)
+        self._knowledge_progress.setFixedHeight(16)
+        self._knowledge_progress.setMinimumWidth(100)
+        self._knowledge_progress.setMaximumWidth(150)
+        header_layout.addWidget(self._knowledge_progress)
+        
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # 文档统计标签
+        self._knowledge_count_label = QLabel(tr("0 个文档"))
+        self._knowledge_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(self._knowledge_count_label)
+
+        # 添加文档区域
+        add_layout = QHBoxLayout()
+        add_layout.setSpacing(4)
+        
+        # 添加方式选择
+        self._knowledge_add_type = QComboBox()
+        self._knowledge_add_type.addItems([tr("文件"), tr("网址")])
+        self._knowledge_add_type.setFixedWidth(55)
+        self._knowledge_add_type.currentTextChanged.connect(self._on_knowledge_add_type_changed)
+        add_layout.addWidget(self._knowledge_add_type)
+        
+        # 路径/URL输入
+        self._knowledge_path_input = QLineEdit()
+        self._knowledge_path_input.setPlaceholderText(tr("选择文件..."))
+        add_layout.addWidget(self._knowledge_path_input, stretch=1)
+        
+        # 浏览按钮
+        self._knowledge_browse_btn = QPushButton("...")
+        self._knowledge_browse_btn.setStyleSheet("font-size: 11px; padding: 4px 6px; min-width: 25px; max-width: 30px;")
+        self._knowledge_browse_btn.clicked.connect(self._on_knowledge_browse)
+        add_layout.addWidget(self._knowledge_browse_btn)
+        
+        # 添加按钮
+        self._knowledge_add_btn = QPushButton(tr("添加"))
+        self._knowledge_add_btn.setToolTip(tr("添加到知识库"))
+        self._knowledge_add_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 40px; max-width: 50px;")
+        self._knowledge_add_btn.clicked.connect(self._on_knowledge_add_document)
+        add_layout.addWidget(self._knowledge_add_btn)
+        
+        layout.addLayout(add_layout)
+
+        # 搜索+筛选+排序行（合并为一行）
+        search_layout = QHBoxLayout()
+        search_layout.setSpacing(4)
+        self._knowledge_search_input = QLineEdit()
+        self._knowledge_search_input.setPlaceholderText(tr("搜索..."))
+        self._knowledge_search_input.returnPressed.connect(self._on_knowledge_search)
+        search_layout.addWidget(self._knowledge_search_input, stretch=1)
+        
+        search_btn = QPushButton(tr("搜索"))
+        search_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 40px; max-width: 50px;")
+        search_btn.clicked.connect(self._on_knowledge_search)
+        search_layout.addWidget(search_btn)
+        
+        # 筛选器
+        self._knowledge_filter_combo = QComboBox()
+        self._knowledge_filter_combo.addItems([tr("全部"), "PDF", "DOCX", "TXT", tr("图片"), tr("网页"), tr("其他")])
+        self._knowledge_filter_combo.setFixedWidth(60)
+        self._knowledge_filter_combo.currentTextChanged.connect(self._on_knowledge_filter_changed)
+        search_layout.addWidget(self._knowledge_filter_combo)
+        
+        # 排序器
+        self._knowledge_sort_combo = QComboBox()
+        self._knowledge_sort_combo.addItems([
+            tr("时间↓"), tr("时间↑"), tr("名称↓"), tr("名称↑"), tr("大小↓"), tr("大小↑")
+        ])
+        self._knowledge_sort_combo.setFixedWidth(60)
+        self._knowledge_sort_combo.currentTextChanged.connect(self._on_knowledge_filter_changed)
+        search_layout.addWidget(self._knowledge_sort_combo)
+        
+        layout.addLayout(search_layout)
+
+        # 搜索结果区域（可折叠）
+        self._knowledge_search_result = QLabel("")
+        self._knowledge_search_result.setWordWrap(True)
+        self._knowledge_search_result.setStyleSheet("font-size: 11px; background: rgba(0,0,0,0.05); padding: 4px; border-radius: 4px;")
+        self._knowledge_search_result.setVisible(False)
+        self._knowledge_search_result.setMaximumHeight(80)
+        layout.addWidget(self._knowledge_search_result)
+
+        # 文档列表滚动区域
+        self._knowledge_scroll = QScrollArea()
+        self._knowledge_scroll.setWidgetResizable(True)
+        self._knowledge_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._knowledge_list_widget = QWidget()
+        self._knowledge_list_layout = QVBoxLayout(self._knowledge_list_widget)
+        self._knowledge_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._knowledge_list_layout.setSpacing(4)
+
+        self._knowledge_scroll.setWidget(self._knowledge_list_widget)
+        layout.addWidget(self._knowledge_scroll, stretch=1)
+
+        # 空状态提示
+        self._knowledge_empty_label = QLabel(
+            tr("📭 知识库为空\n\n添加文档到知识库，\n支持PDF、DOCX、图片、网页。")
+        )
+        self._knowledge_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._knowledge_empty_label.setStyleSheet("color: gray; font-size: 11px; padding: 15px;")
+        self._knowledge_empty_label.setWordWrap(True)
+        self._knowledge_list_layout.addWidget(self._knowledge_empty_label)
+        self._knowledge_list_layout.addStretch()
+
+        # 底部按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+        
+        refresh_btn = QPushButton(tr("刷新"))
+        refresh_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 45px; max-width: 55px;")
+        refresh_btn.clicked.connect(self._on_refresh_knowledge)
+        btn_layout.addWidget(refresh_btn)
+        
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        # 保存所有文档用于筛选排序
+        self._knowledge_all_docs: list = []
+
+        return widget
+
+    def _create_history_tab(self) -> QWidget:
+        """创建历史对话TAB页面（完整功能）。"""
+        from datetime import datetime
+        
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # 标题行
+        header_layout = QHBoxLayout()
+        title_label = QLabel(tr("📋 历史对话"))
+        title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header_layout.addWidget(title_label)
+        
+        # 会话数量
+        self._history_count_label = QLabel("0 " + tr("个会话"))
+        self._history_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        header_layout.addWidget(self._history_count_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # 搜索行
+        search_layout = QHBoxLayout()
+        search_layout.setSpacing(4)
+        self._history_search_input = QLineEdit()
+        self._history_search_input.setPlaceholderText(tr("搜索对话..."))
+        self._history_search_input.textChanged.connect(self._on_history_filter_changed)
+        search_layout.addWidget(self._history_search_input, stretch=1)
+        
+        # 排序器
+        self._history_sort_combo = QComboBox()
+        self._history_sort_combo.addItems([tr("时间↓"), tr("时间↑"), tr("消息数↓"), tr("消息数↑")])
+        self._history_sort_combo.setFixedWidth(70)
+        self._history_sort_combo.currentTextChanged.connect(self._on_history_filter_changed)
+        search_layout.addWidget(self._history_sort_combo)
+        
+        layout.addLayout(search_layout)
+
+        # 会话列表滚动区域
+        self._history_scroll = QScrollArea()
+        self._history_scroll.setWidgetResizable(True)
+        self._history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self._history_list_widget = QWidget()
+        self._history_list_layout = QVBoxLayout(self._history_list_widget)
+        self._history_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._history_list_layout.setSpacing(4)
+
+        self._history_scroll.setWidget(self._history_list_widget)
+        layout.addWidget(self._history_scroll, stretch=1)
+
+        # 空状态提示
+        self._history_empty_label = QLabel(
+            tr("📭 暂无历史对话\n\n开始新的对话后，\n会自动保存在这里。")
+        )
+        self._history_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._history_empty_label.setStyleSheet("color: gray; font-size: 11px; padding: 15px;")
+        self._history_empty_label.setWordWrap(True)
+        self._history_list_layout.addWidget(self._history_empty_label)
+        self._history_list_layout.addStretch()
+
+        # 底部按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+        
+        refresh_btn = QPushButton(tr("刷新"))
+        refresh_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 45px; max-width: 55px;")
+        refresh_btn.clicked.connect(self._on_refresh_history)
+        btn_layout.addWidget(refresh_btn)
+        
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        # 保存所有会话用于筛选排序
+        self._history_all_sessions: list = []
 
         return widget
 
@@ -1189,6 +1529,11 @@ class MainWindow(QMainWindow):
         # 左侧：模型名
         self._status_model = QLabel(tr("模型") + ": " + tr("未选择"))
         self._status_bar.addWidget(self._status_model)
+
+        # 当前会话（模型右侧）
+        self._status_session = QLabel(tr("会话") + ": " + tr("新会话"))
+        self._status_session.setStyleSheet("margin-left: 16px;")
+        self._status_bar.addWidget(self._status_session)
 
         # 中间：Token 简报
         self._status_tokens = QLabel("")
@@ -1618,6 +1963,7 @@ class MainWindow(QMainWindow):
         """新建会话。"""
         self._chat_widget.clear()
         self._session_info.setText("新会话")
+        self._status_session.setText(tr("会话") + ": " + tr("新会话"))
         self.message_sent.emit("/new_session")
 
     def _on_copy_chat(self) -> None:
@@ -1641,20 +1987,25 @@ class MainWindow(QMainWindow):
         from src import __version__
         QMessageBox.about(
             self,
-            "关于 WinClaw",
-            f"<h2>WinClaw v{__version__}</h2>"
-            "<p>Windows AI 桌面智能体</p>"
+            "关于 WeClaw",
+            f"<h2>WeClaw v{__version__}</h2>"
+            "<p>你的 AI 桌面管家 - 38+ 工具 + 移动端远程控制</p>"
             "<p>基于 PySide6 + LiteLLM 构建</p>"
             "<hr>"
             "<p><b>功能特性:</b></p>"
             "<ul>"
-            "<li>多模型支持 (OpenAI/DeepSeek/Claude/Gemini 等)</li>"
-            "<li>工具调用 (Shell/文件/截图/浏览器等)</li>"
-            "<li>MCP 协议支持</li>"
+            "<li>多模型支持 (OpenAI/DeepSeek/Claude/Gemini/智谱 GLM/Kimi/通义千问等)</li>"
+            "<li>38+ 实用工具 (Shell/文件管理/截图/浏览器自动化/语音交互/OCR 等)</li>"
+            "<li>工作流引擎 - 自动化复杂任务</li>"
+            "<li>定时任务系统 - 计划任务管理</li>"
+            "<li>MCP 协议扩展支持</li>"
+            "<li>移动端 PWA 远程控制</li>"
             "<li>对话历史持久化</li>"
+            "<li>主动陪伴智能系统</li>"
             "</ul>"
             "<hr>"
-            "<p><a href='https://github.com/wyg5208/WinClaw'>GitHub</a></p>"
+            "<p><b>版本:</b> v2.12.0 (2026-03-22)</p>"
+            "<p><a href='https://github.com/wyg5208/weclaw'>GitHub 项目主页</a></p>"
         )
 
     def _on_model_changed(self, model_name: str) -> None:
@@ -1978,13 +2329,764 @@ class MainWindow(QMainWindow):
         self.history_requested.emit()
 
     def update_generated_space_count(self, count: int) -> None:
-        """更新生成空间按钮上的文件数量显示。"""
+        """更新生成空间TAB页面的文件数量显示。"""
         self._gen_space_count = count
+        self._gen_space_count_label.setText(f"{count} " + tr("个文件"))
         if count > 0:
-            self._gen_space_btn.setText(f"📂 生成空间 ({count})")
-            self._gen_space_btn.setStyleSheet(
-                "font-weight: bold; color: #0078d4;"
-            )
+            self._gen_space_count_label.setStyleSheet("color: #0078d4; font-size: 12px; font-weight: bold;")
         else:
-            self._gen_space_btn.setText("📂 生成空间")
-            self._gen_space_btn.setStyleSheet("")
+            self._gen_space_count_label.setStyleSheet("color: gray; font-size: 12px;")
+
+    def set_session_info(self, text: str) -> None:
+        """设置会话信息（同时更新底栏和隐藏的兼容标签）。"""
+        self._session_info.setText(text)
+        # 截断过长的标题
+        display_text = text if len(text) <= 20 else text[:17] + "..."
+        self._status_session.setText(tr("会话") + ": " + display_text)
+
+    # ===== 生成空间TAB页面事件处理 =====
+
+    def _on_open_generated_space_folder(self) -> None:
+        """打开生成空间文件夹。"""
+        self.generated_space_requested.emit()
+
+    def _on_refresh_generated_space(self) -> None:
+        """刷新生成空间TAB页面。"""
+        self.generated_space_requested.emit()
+
+    def _on_gen_filter_changed(self) -> None:
+        """生成空间筛选或排序条件变化。"""
+        self._refresh_gen_space_display()
+
+    def _on_clear_generated_space(self) -> None:
+        """清空生成空间记录。"""
+        from PySide6.QtWidgets import QMessageBox
+        
+        if not hasattr(self, '_gen_all_files') or not self._gen_all_files:
+            QMessageBox.information(self, tr("提示"), tr("没有可清空的记录"))
+            return
+        
+        reply = QMessageBox.question(
+            self,
+            tr("清空生成记录"),
+            tr("确定清空所有生成文件记录？\n\n注意：仅清空追踪记录，不会删除实际文件。"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # 发出清空信号由gui_app处理
+            self._gen_all_files = []
+            self._refresh_gen_space_display()
+            # 通知gui_app清空
+            self.generated_space_clear_requested.emit()
+
+    def _get_gen_file_category(self, file_info) -> str:
+        """获取生成文件的类别。"""
+        name = file_info.name.lower() if hasattr(file_info, 'name') else str(file_info).lower()
+        ext = file_info.extension.lower() if hasattr(file_info, 'extension') and file_info.extension else ''
+        
+        doc_exts = ('.pdf', '.doc', '.docx', '.txt', '.md', '.rtf', '.ppt', '.pptx', '.xls', '.xlsx', '.csv')
+        img_exts = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico')
+        code_exts = ('.py', '.js', '.ts', '.html', '.css', '.json', '.xml', '.yaml', '.yml', '.java', '.c', '.cpp', '.go', '.rs')
+        
+        if ext in doc_exts or any(name.endswith(e) for e in doc_exts):
+            return tr("文档")
+        elif ext in img_exts or any(name.endswith(e) for e in img_exts):
+            return tr("图片")
+        elif ext in code_exts or any(name.endswith(e) for e in code_exts):
+            return tr("代码")
+        else:
+            return tr("其他")
+
+    def _apply_gen_filter_and_sort(self) -> list:
+        """应用生成空间筛选和排序。"""
+        if not hasattr(self, '_gen_all_files') or not self._gen_all_files:
+            return []
+        
+        search_text = self._gen_search_input.text().strip().lower()
+        filter_type = self._gen_filter_combo.currentText()
+        sort_type = self._gen_sort_combo.currentText()
+        
+        # 筛选
+        filtered = []
+        for f in self._gen_all_files:
+            name = f.name.lower() if hasattr(f, 'name') else str(f).lower()
+            if search_text and search_text not in name:
+                continue
+            
+            if filter_type != tr("全部"):
+                category = self._get_gen_file_category(f)
+                if category != filter_type:
+                    continue
+            
+            filtered.append(f)
+        
+        # 排序
+        if sort_type == tr("时间↓"):
+            filtered.sort(key=lambda x: x.created_at if hasattr(x, 'created_at') and x.created_at else "", reverse=True)
+        elif sort_type == tr("时间↑"):
+            filtered.sort(key=lambda x: x.created_at if hasattr(x, 'created_at') and x.created_at else "")
+        elif sort_type == tr("名称↓"):
+            filtered.sort(key=lambda x: x.name.lower() if hasattr(x, 'name') else "", reverse=True)
+        elif sort_type == tr("名称↑"):
+            filtered.sort(key=lambda x: x.name.lower() if hasattr(x, 'name') else "")
+        elif sort_type == tr("大小↓"):
+            filtered.sort(key=lambda x: x.size if hasattr(x, 'size') else 0, reverse=True)
+        elif sort_type == tr("大小↑"):
+            filtered.sort(key=lambda x: x.size if hasattr(x, 'size') else 0)
+        
+        return filtered
+
+    def _refresh_gen_space_display(self) -> None:
+        """刷新生成空间显示（应用筛选排序）。"""
+        try:
+            # 清空现有卡片
+            items_to_remove = []
+            for i in range(self._gen_space_list_layout.count()):
+                item = self._gen_space_list_layout.itemAt(i)
+                if item:
+                    widget = item.widget()
+                    if widget and widget != self._gen_space_empty_label:
+                        items_to_remove.append(widget)
+            
+            for widget in items_to_remove:
+                self._gen_space_list_layout.removeWidget(widget)
+                widget.deleteLater()
+            
+            # 应用筛选和排序
+            filtered_files = self._apply_gen_filter_and_sort()
+            
+            if not filtered_files:
+                self._gen_space_empty_label.show()
+                total_count = len(self._gen_all_files) if hasattr(self, '_gen_all_files') else 0
+                if total_count > 0:
+                    self._gen_space_count_label.setText(f"0 / {total_count} " + tr("个文件"))
+                else:
+                    self._gen_space_count_label.setText(tr("0 个文件"))
+                return
+            
+            self._gen_space_empty_label.hide()
+            total_count = len(self._gen_all_files) if hasattr(self, '_gen_all_files') else 0
+            if len(filtered_files) < total_count:
+                self._gen_space_count_label.setText(f"{len(filtered_files)} / {total_count} " + tr("个文件"))
+            else:
+                self._gen_space_count_label.setText(f"{len(filtered_files)} " + tr("个文件"))
+            
+            # 添加文件卡片（最多显示20个）
+            for file_info in filtered_files[:20]:
+                try:
+                    card = self._create_file_card(file_info)
+                    self._gen_space_list_layout.insertWidget(self._gen_space_list_layout.count() - 1, card)
+                except Exception as e:
+                    logger.warning(f"创建文件卡片失败: {e}")
+                    
+        except Exception as e:
+            logger.error(f"刷新生成空间显示失败: {e}")
+
+    def update_generated_space_files(self, files: list) -> None:
+        """更新生成空间TAB页面的文件列表。"""
+        try:
+            # 保存所有文件用于筛选排序
+            self._gen_all_files = list(files) if files else []
+            # 刷新显示
+            self._refresh_gen_space_display()
+        except Exception as e:
+            logger.error(f"更新生成空间文件列表失败: {e}")
+            self._gen_space_empty_label.show()
+            self._gen_space_count_label.setText(tr("加载失败"))
+
+    def _create_file_card(self, file_info) -> QWidget:
+        """创建文件卡片组件（含打开和删除按钮）。"""
+        from PySide6.QtGui import QFont, QCursor
+
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setFrameShadow(QFrame.Shadow.Raised)
+        card.setObjectName("fileCard")
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        # 图标
+        icon_label = QLabel(file_info.get_icon() if hasattr(file_info, 'get_icon') else "📄")
+        icon_label.setFont(QFont("", 14))
+        icon_label.setFixedWidth(24)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon_label)
+
+        # 文件信息
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(0)
+
+        name_label = QLabel(file_info.name if hasattr(file_info, 'name') else str(file_info))
+        name_label.setFont(QFont("", 9))
+        name_label.setWordWrap(True)
+        name_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        if hasattr(file_info, 'path'):
+            name_label.mousePressEvent = lambda event, p=file_info.path: self._open_file_path(p)
+            name_label.setToolTip(tr("点击打开: ") + file_info.path)
+        info_layout.addWidget(name_label)
+
+        # 详细信息
+        size_str = file_info.size_display() if hasattr(file_info, 'size_display') else ""
+        detail_label = QLabel(size_str)
+        detail_label.setStyleSheet("font-size: 9px; color: #888;")
+        info_layout.addWidget(detail_label)
+
+        layout.addLayout(info_layout, stretch=1)
+
+        # 打开按钮
+        open_btn = QPushButton(tr("打开"))
+        open_btn.setToolTip(tr("打开文件"))
+        open_btn.setStyleSheet("font-size: 11px; padding: 3px 6px; min-width: 38px; max-width: 45px;")
+        open_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        if hasattr(file_info, 'path'):
+            open_btn.clicked.connect(lambda checked, p=file_info.path: self._open_file_path(p))
+        layout.addWidget(open_btn)
+
+        # 删除按钮
+        delete_btn = QPushButton(tr("删除"))
+        delete_btn.setToolTip(tr("删除此记录"))
+        delete_btn.setStyleSheet("font-size: 11px; padding: 3px 6px; min-width: 38px; max-width: 45px;")
+        delete_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        if hasattr(file_info, 'path'):
+            delete_btn.clicked.connect(lambda checked, f=file_info: self._on_delete_gen_file(f))
+        layout.addWidget(delete_btn)
+
+        return card
+
+    def _on_delete_gen_file(self, file_info) -> None:
+        """删除单个生成文件记录。"""
+        from PySide6.QtWidgets import QMessageBox
+        
+        name = file_info.name if hasattr(file_info, 'name') else str(file_info)
+        reply = QMessageBox.question(
+            self,
+            tr("删除文件记录"),
+            tr("确定删除此文件记录？\n") + f"{name}\n\n" + tr("注意：仅删除追踪记录，不会删除实际文件。"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # 从列表中移除
+            if hasattr(self, '_gen_all_files') and file_info in self._gen_all_files:
+                self._gen_all_files.remove(file_info)
+                self._refresh_gen_space_display()
+            # 通知gui_app删除
+            if hasattr(file_info, 'path'):
+                self.generated_space_file_delete_requested.emit(file_info.path)
+
+    def _open_file_path(self, path: str) -> None:
+        """打开文件路径。"""
+        import subprocess
+        import sys
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["explorer", path], check=False)
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except Exception as e:
+            logger.warning(f"打开文件失败: {e}")
+
+    # ===== 知识库TAB页面事件处理 =====
+
+    def _on_knowledge_add_type_changed(self, text: str) -> None:
+        """添加类型变化。"""
+        if text == tr("文件"):
+            self._knowledge_path_input.setPlaceholderText(tr("选择文件..."))
+            self._knowledge_browse_btn.setVisible(True)
+        else:
+            self._knowledge_path_input.setPlaceholderText(tr("输入网页URL..."))
+            self._knowledge_browse_btn.setVisible(False)
+
+    def _on_knowledge_browse(self) -> None:
+        """浏览文件。"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("选择文档"),
+            "",
+            tr("所有支持的文件") + " (*.pdf *.docx *.doc *.txt *.md *.json *.csv *.jpg *.jpeg *.png);;" +
+            "PDF (*.pdf);;" +
+            "Word (*.docx *.doc);;" +
+            tr("文本文件") + " (*.txt *.md);;" +
+            tr("所有文件") + " (*.*)",
+        )
+        if file_path:
+            self._knowledge_path_input.setText(file_path)
+
+    def _on_knowledge_add_document(self) -> None:
+        """添加知识库文档。"""
+        add_type = self._knowledge_add_type.currentText()
+        path_or_url = self._knowledge_path_input.text().strip()
+        
+        if not path_or_url:
+            QMessageBox.warning(self, tr("提示"), tr("请输入文件路径或网址"))
+            return
+        
+        if add_type == tr("文件"):
+            import os
+            if not os.path.exists(path_or_url):
+                QMessageBox.warning(self, tr("提示"), tr("文件不存在"))
+                return
+            # 发出添加文件信号
+            self.knowledge_add_file_requested.emit(path_or_url)
+        else:
+            if not path_or_url.startswith(("http://", "https://")):
+                QMessageBox.warning(self, tr("提示"), tr("请输入有效的URL（以 http:// 或 https:// 开头）"))
+                return
+            # 发出添加URL信号
+            self.knowledge_add_url_requested.emit(path_or_url)
+        
+        # 清空输入
+        self._knowledge_path_input.clear()
+
+    def _on_knowledge_search(self) -> None:
+        """搜索知识库。"""
+        query = self._knowledge_search_input.text().strip()
+        if not query:
+            QMessageBox.warning(self, tr("提示"), tr("请输入搜索内容"))
+            return
+        # 发出搜索信号
+        self.knowledge_search_requested.emit(query)
+
+    def _on_knowledge_filter_changed(self) -> None:
+        """知识库筛选或排序条件变化。"""
+        self._refresh_knowledge_display()
+
+    def _on_refresh_knowledge(self) -> None:
+        """刷新知识库TAB页面。"""
+        self.knowledge_rag_requested.emit()
+
+    def _get_knowledge_doc_category(self, doc_info: dict) -> str:
+        """获取知识库文档的类别。"""
+        file_type = doc_info.get("file_type", "")
+        
+        if file_type == "pdf":
+            return "PDF"
+        elif file_type in ("docx", "doc"):
+            return "DOCX"
+        elif file_type in ("txt", "md", "text", "markdown"):
+            return "TXT"
+        elif file_type in ("jpg", "jpeg", "png", "gif", "webp", "bmp", "image"):
+            return tr("图片")
+        elif file_type == "url":
+            return tr("网页")
+        else:
+            return tr("其他")
+
+    def _apply_knowledge_filter_and_sort(self) -> list:
+        """应用知识库筛选和排序。"""
+        if not hasattr(self, '_knowledge_all_docs') or not self._knowledge_all_docs:
+            return []
+        
+        filter_type = self._knowledge_filter_combo.currentText()
+        sort_type = self._knowledge_sort_combo.currentText()
+        
+        # 筛选
+        filtered = []
+        for doc in self._knowledge_all_docs:
+            if filter_type == tr("全部"):
+                filtered.append(doc)
+            else:
+                category = self._get_knowledge_doc_category(doc)
+                if category == filter_type:
+                    filtered.append(doc)
+        
+        # 排序
+        if sort_type == tr("时间↓"):
+            filtered.sort(key=lambda x: x.get("indexed_at", ""), reverse=True)
+        elif sort_type == tr("时间↑"):
+            filtered.sort(key=lambda x: x.get("indexed_at", ""))
+        elif sort_type == tr("名称↓"):
+            filtered.sort(key=lambda x: x.get("filename", "").lower(), reverse=True)
+        elif sort_type == tr("名称↑"):
+            filtered.sort(key=lambda x: x.get("filename", "").lower())
+        elif sort_type == tr("大小↓"):
+            filtered.sort(key=lambda x: x.get("size", 0), reverse=True)
+        elif sort_type == tr("大小↑"):
+            filtered.sort(key=lambda x: x.get("size", 0))
+        
+        return filtered
+
+    def _refresh_knowledge_display(self) -> None:
+        """刷新知识库显示（应用筛选排序）。"""
+        try:
+            # 清空现有卡片
+            items_to_remove = []
+            for i in range(self._knowledge_list_layout.count()):
+                item = self._knowledge_list_layout.itemAt(i)
+                if item:
+                    widget = item.widget()
+                    if widget and widget != self._knowledge_empty_label:
+                        items_to_remove.append(widget)
+            
+            for widget in items_to_remove:
+                self._knowledge_list_layout.removeWidget(widget)
+                widget.deleteLater()
+            
+            # 应用筛选和排序
+            filtered_docs = self._apply_knowledge_filter_and_sort()
+            
+            if not filtered_docs:
+                self._knowledge_empty_label.show()
+                total_count = len(self._knowledge_all_docs) if hasattr(self, '_knowledge_all_docs') else 0
+                if total_count > 0:
+                    self._knowledge_count_label.setText(f"0 / {total_count} " + tr("个文档"))
+                else:
+                    self._knowledge_count_label.setText(tr("0 个文档"))
+                return
+            
+            self._knowledge_empty_label.hide()
+            total_count = len(self._knowledge_all_docs) if hasattr(self, '_knowledge_all_docs') else 0
+            if len(filtered_docs) < total_count:
+                self._knowledge_count_label.setText(f"{len(filtered_docs)} / {total_count} " + tr("个文档"))
+            else:
+                self._knowledge_count_label.setText(f"{len(filtered_docs)} " + tr("个文档"))
+            
+            # 添加文档卡片（最多显示20个）
+            for doc_info in filtered_docs[:20]:
+                try:
+                    card = self._create_doc_card(doc_info)
+                    self._knowledge_list_layout.insertWidget(self._knowledge_list_layout.count() - 1, card)
+                except Exception as e:
+                    logger.warning(f"创建文档卡片失败: {e}")
+                    
+        except Exception as e:
+            logger.error(f"刷新知识库显示失败: {e}")
+
+    def update_knowledge_search_result(self, result: str) -> None:
+        """更新知识库搜索结果。"""
+        if result:
+            self._knowledge_search_result.setText(result)
+            self._knowledge_search_result.setVisible(True)
+        else:
+            self._knowledge_search_result.setVisible(False)
+
+    def update_knowledge_progress(self, visible: bool, value: int = 0, text: str = "") -> None:
+        """更新知识库添加进度。"""
+        self._knowledge_progress.setVisible(visible)
+        if visible:
+            self._knowledge_progress.setValue(value)
+            if text:
+                self._knowledge_progress.setFormat(text)
+
+    def update_knowledge_documents(self, docs: list) -> None:
+        """更新知识库TAB页面的文档列表。"""
+        try:
+            # 保存所有文档用于筛选排序
+            self._knowledge_all_docs = list(docs) if docs else []
+            # 刷新显示
+            self._refresh_knowledge_display()
+        except Exception as e:
+            logger.error(f"更新知识库文档列表失败: {e}")
+            self._knowledge_empty_label.show()
+            self._knowledge_count_label.setText(tr("加载失败"))
+
+    def _create_doc_card(self, doc_info: dict) -> QWidget:
+        """创建文档卡片组件（含查看和删除按钮）。"""
+        from PySide6.QtGui import QFont, QCursor
+
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setFrameShadow(QFrame.Shadow.Raised)
+        card.setObjectName("documentCard")
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        # 图标
+        file_type = doc_info.get("file_type", "unknown")
+        icon_map = {
+            "pdf": "📕", "docx": "📘", "doc": "📘", "url": "🌐",
+            "image": "🖼️", "text": "📄", "txt": "📄", "md": "📄",
+            "jpg": "🖼️", "jpeg": "🖼️", "png": "🖼️", "gif": "🖼️",
+        }
+        icon_label = QLabel(icon_map.get(file_type, "📄"))
+        icon_label.setFont(QFont("", 14))
+        icon_label.setFixedWidth(24)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon_label)
+
+        # 文档信息
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(0)
+
+        filename = doc_info.get("filename", tr("未知"))
+        name_label = QLabel(filename)
+        name_label.setFont(QFont("", 9))
+        name_label.setWordWrap(True)
+        name_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        name_label.setToolTip(doc_info.get("source_path", filename))
+        name_label.mousePressEvent = lambda event, d=doc_info: self._on_view_knowledge_doc(d)
+        info_layout.addWidget(name_label)
+
+        # 详细信息
+        size = doc_info.get("size", 0)
+        size_kb = size / 1024 if size else 0
+        chunks = doc_info.get("chunk_count", 0)
+        detail_text = f"{file_type.upper()} · {size_kb:.0f}KB · {chunks}" + tr("段")
+        detail_label = QLabel(detail_text)
+        detail_label.setStyleSheet("font-size: 9px; color: #888;")
+        info_layout.addWidget(detail_label)
+
+        layout.addLayout(info_layout, stretch=1)
+
+        # 查看按钮
+        view_btn = QPushButton(tr("查看"))
+        view_btn.setToolTip(tr("查看详情"))
+        view_btn.setStyleSheet("font-size: 11px; padding: 3px 6px; min-width: 38px; max-width: 45px;")
+        view_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        view_btn.clicked.connect(lambda checked, d=doc_info: self._on_view_knowledge_doc(d))
+        layout.addWidget(view_btn)
+
+        # 删除按钮
+        delete_btn = QPushButton(tr("删除"))
+        delete_btn.setToolTip(tr("从知识库删除"))
+        delete_btn.setStyleSheet("font-size: 11px; padding: 3px 6px; min-width: 38px; max-width: 45px;")
+        delete_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        doc_id = doc_info.get("id")
+        if doc_id is not None:
+            delete_btn.clicked.connect(lambda checked, did=doc_id: self._on_delete_knowledge_doc(did))
+        layout.addWidget(delete_btn)
+
+        return card
+
+    def _on_view_knowledge_doc(self, doc_info: dict) -> None:
+        """查看知识库文档详情。"""
+        try:
+            from .document_detail_dialog import DocumentDetailDialog
+            dlg = DocumentDetailDialog(doc_info, self)
+            dlg.exec()
+        except Exception as e:
+            logger.warning(f"查看文档详情失败: {e}")
+            QMessageBox.information(
+                self,
+                tr("文档信息"),
+                f"{tr('文件名')}: {doc_info.get('filename', tr('未知'))}\n"
+                f"{tr('类型')}: {doc_info.get('file_type', tr('未知'))}\n"
+                f"{tr('片段数')}: {doc_info.get('chunk_count', 0)}"
+            )
+
+    def _on_delete_knowledge_doc(self, doc_id: int) -> None:
+        """删除知识库文档。"""
+        reply = QMessageBox.question(
+            self,
+            tr("确认删除"),
+            tr("确定要从知识库中删除此文档吗？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # 发出删除信号
+            self.knowledge_doc_delete_requested.emit(doc_id)
+
+    def switch_to_tools_tab(self) -> None:
+        """切换到工具状态TAB。"""
+        self._right_tab_widget.setCurrentIndex(0)
+
+    def switch_to_generated_space_tab(self) -> None:
+        """切换到生成空间TAB。"""
+        self._right_tab_widget.setCurrentIndex(1)
+
+    def switch_to_knowledge_tab(self) -> None:
+        """切换到知识库TAB。"""
+        self._right_tab_widget.setCurrentIndex(2)
+
+    def switch_to_history_tab(self) -> None:
+        """切换到历史对话TAB。"""
+        self._right_tab_widget.setCurrentIndex(3)
+
+    # ============ 历史对话TAB相关方法 ============
+
+    def _on_history_filter_changed(self) -> None:
+        """历史对话筛选或排序条件变化。"""
+        self._refresh_history_display()
+
+    def _on_refresh_history(self) -> None:
+        """刷新历史对话TAB页面。"""
+        self.history_refresh_requested.emit()
+
+    def _apply_history_filter_and_sort(self) -> list:
+        """应用历史对话筛选和排序。"""
+        if not hasattr(self, '_history_all_sessions') or not self._history_all_sessions:
+            return []
+        
+        search_text = self._history_search_input.text().strip().lower()
+        sort_type = self._history_sort_combo.currentText()
+        
+        # 搜索过滤
+        filtered = []
+        for session in self._history_all_sessions:
+            if search_text:
+                title = session.get("title", "").lower()
+                if search_text in title:
+                    filtered.append(session)
+            else:
+                filtered.append(session)
+        
+        # 排序
+        if sort_type == tr("时间↓"):
+            filtered.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+        elif sort_type == tr("时间↑"):
+            filtered.sort(key=lambda x: x.get("updated_at", ""))
+        elif sort_type == tr("消息数↓"):
+            filtered.sort(key=lambda x: x.get("message_count", 0), reverse=True)
+        elif sort_type == tr("消息数↑"):
+            filtered.sort(key=lambda x: x.get("message_count", 0))
+        
+        return filtered
+
+    def _refresh_history_display(self) -> None:
+        """根据当前筛选排序条件刷新历史对话显示。"""
+        try:
+            # 清空现有卡片（保留空状态标签）
+            items_to_remove = []
+            for i in range(self._history_list_layout.count()):
+                item = self._history_list_layout.itemAt(i)
+                if item:
+                    widget = item.widget()
+                    if widget and widget != self._history_empty_label:
+                        items_to_remove.append(widget)
+            
+            for widget in items_to_remove:
+                self._history_list_layout.removeWidget(widget)
+                widget.deleteLater()
+            
+            # 应用筛选排序
+            filtered_sessions = self._apply_history_filter_and_sort()
+            
+            # 重新添加卡片
+            if not filtered_sessions:
+                self._history_empty_label.show()
+                total_count = len(self._history_all_sessions) if hasattr(self, '_history_all_sessions') else 0
+                if total_count > 0:
+                    self._history_count_label.setText(f"0 / {total_count} " + tr("个会话"))
+                else:
+                    self._history_count_label.setText(tr("0 个会话"))
+                return
+            
+            self._history_empty_label.hide()
+            total_count = len(self._history_all_sessions) if hasattr(self, '_history_all_sessions') else 0
+            if len(filtered_sessions) < total_count:
+                self._history_count_label.setText(f"{len(filtered_sessions)} / {total_count} " + tr("个会话"))
+            else:
+                self._history_count_label.setText(f"{len(filtered_sessions)} " + tr("个会话"))
+            
+            # 添加会话卡片（最多显示50个）
+            for session_info in filtered_sessions[:50]:
+                try:
+                    card = self._create_session_card(session_info)
+                    self._history_list_layout.insertWidget(self._history_list_layout.count() - 1, card)
+                except Exception as e:
+                    logger.warning(f"创建会话卡片失败: {e}")
+                    
+        except Exception as e:
+            logger.error(f"刷新历史对话显示失败: {e}")
+
+    def update_history_sessions(self, sessions: list) -> None:
+        """更新历史对话TAB页面的会话列表。"""
+        try:
+            # 保存所有会话用于筛选排序
+            self._history_all_sessions = list(sessions) if sessions else []
+            # 刷新显示
+            self._refresh_history_display()
+        except Exception as e:
+            logger.error(f"更新历史会话列表失败: {e}")
+            self._history_empty_label.show()
+            self._history_count_label.setText(tr("加载失败"))
+
+    def _create_session_card(self, session_info: dict) -> QWidget:
+        """创建会话卡片组件（含打开和删除按钮）。"""
+        from PySide6.QtGui import QFont, QCursor
+        from datetime import datetime
+
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setFrameShadow(QFrame.Shadow.Raised)
+        card.setObjectName("sessionCard")
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        # 图标
+        icon_label = QLabel("💬")
+        icon_label.setFont(QFont("", 14))
+        icon_label.setFixedWidth(24)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon_label)
+
+        # 会话信息
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(0)
+
+        title = session_info.get("title", tr("未命名对话"))
+        name_label = QLabel(title)
+        name_label.setFont(QFont("", 9))
+        name_label.setWordWrap(True)
+        name_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        session_id = session_info.get("id", "")
+        name_label.mousePressEvent = lambda event, sid=session_id: self._on_select_history_session(sid)
+        info_layout.addWidget(name_label)
+
+        # 详细信息：时间 + 消息数
+        updated_at = session_info.get("updated_at", "")
+        message_count = session_info.get("message_count", 0)
+        time_str = ""
+        if updated_at:
+            try:
+                dt = datetime.fromisoformat(updated_at)
+                time_str = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                time_str = updated_at[:16] if len(updated_at) >= 16 else updated_at
+        
+        detail_text = f"{time_str} · {message_count}" + tr("条消息")
+        detail_label = QLabel(detail_text)
+        detail_label.setStyleSheet("font-size: 9px; color: #888;")
+        info_layout.addWidget(detail_label)
+
+        layout.addLayout(info_layout, stretch=1)
+
+        # 打开按钮
+        open_btn = QPushButton(tr("打开"))
+        open_btn.setToolTip(tr("恢复此对话"))
+        open_btn.setStyleSheet("font-size: 11px; padding: 3px 6px; min-width: 38px; max-width: 45px;")
+        open_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        open_btn.clicked.connect(lambda checked, sid=session_id: self._on_select_history_session(sid))
+        layout.addWidget(open_btn)
+
+        # 删除按钮
+        delete_btn = QPushButton(tr("删除"))
+        delete_btn.setToolTip(tr("删除此对话"))
+        delete_btn.setStyleSheet("font-size: 11px; padding: 3px 6px; min-width: 38px; max-width: 45px;")
+        delete_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        delete_btn.clicked.connect(lambda checked, sid=session_id: self._on_delete_history_session(sid))
+        layout.addWidget(delete_btn)
+
+        return card
+
+    def _on_select_history_session(self, session_id: str) -> None:
+        """选择历史会话。"""
+        if session_id:
+            self.history_session_selected.emit(session_id)
+
+    def _on_delete_history_session(self, session_id: str) -> None:
+        """删除历史会话。"""
+        reply = QMessageBox.question(
+            self,
+            tr("确认删除"),
+            tr("确定要删除此历史对话吗？删除后无法恢复。"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            # 发出删除信号
+            self.history_session_delete_requested.emit(session_id)
+            # 从本地列表中移除
+            self._history_all_sessions = [
+                s for s in self._history_all_sessions if s.get("id") != session_id
+            ]
+            # 刷新显示
+            self._refresh_history_display()

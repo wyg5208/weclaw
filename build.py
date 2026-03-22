@@ -177,13 +177,13 @@ def create_zip() -> Path | None:
     print("==> 创建 ZIP 压缩包...")
     
     version = get_version()
-    output_dir = DIST_DIR / "WinClaw"
+    output_dir = DIST_DIR / "WeClaw"
     
     if not output_dir.exists():
         print("    警告: 输出目录不存在")
         return None
     
-    zip_name = f"WinClaw-{version}-win64"
+    zip_name = f"WeClaw-{version}-win64"
     zip_path = DIST_DIR / zip_name
     
     shutil.make_archive(str(zip_path), "zip", DIST_DIR, "WinClaw")

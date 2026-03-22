@@ -49,7 +49,7 @@ HELP_CONTENTS = {
 <p>在聊天框中输入问题，按 Enter 发送。AI 会自动调用合适的工具来帮助你。</p>
 
 <h3>3. 可用工具</h3>
-<p>WinClaw 内置了多种工具：</p>
+<p>WeClaw 内置了多种工具：</p>
 <ul>
   <li>💻 命令行 - 执行系统命令</li>
   <li>📄 文件操作 - 读写文件</li>
@@ -72,7 +72,7 @@ HELP_CONTENTS = {
 <h2>功能介绍</h2>
 
 <h3>AI 对话</h3>
-<p>WinClaw 支持多种 AI 模型：</p>
+<p>WeClaw 支持多种 AI 模型：</p>
 <ul>
   <li>OpenAI GPT-4 / GPT-3.5</li>
   <li>DeepSeek</li>
@@ -151,7 +151,7 @@ HELP_CONTENTS = {
 </ul>
 
 <h3>Q: 首次使用需要做什么？</h3>
-<p>WinClaw 需要配置至少一个 AI 模型的 API Key 才能使用：</p>
+<p>WeClaw 需要配置至少一个 AI 模型的 API Key 才能使用：</p>
 <ol>
   <li>点击菜单【帮助】->【设置】</li>
   <li>在【API 密钥】选项卡中选择任意一个模型</li>

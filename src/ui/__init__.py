@@ -1,4 +1,4 @@
-"""WinClaw UI 模块。
+"""WeClaw UI 模块。
 
 提供 PySide6 构建的图形用户界面。
 
@@ -9,7 +9,7 @@
 - gui_app: GUI 应用入口（Agent 集成、信号连接）
 
 注意：导入本模块需要 PySide6 和 qasync 依赖。
-如未安装，请执行: pip install PySide6 qasync
+如未安装，请执行：pip install PySide6 qasync
 """
 
 from __future__ import annotations
