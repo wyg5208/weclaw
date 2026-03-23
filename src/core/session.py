@@ -266,6 +266,63 @@ class SessionManager:
             tool_call_id=tool_call_id,
         )
 
+    def cleanup_incomplete_tool_calls(self, session_id: str = "") -> int:
+        """清理未完成的 tool_calls 消息。
+
+        当 assistant 消息包含 tool_calls 但没有对应的 tool 消息时，
+        需要补全错误消息或移除不完整的 assistant 消息。
+
+        Args:
+            session_id: 指定会话ID
+
+        Returns:
+            清理的消息数量
+        """
+        session = self._get_session(session_id)
+        messages = session.messages
+        if not messages:
+            return 0
+
+        cleaned = 0
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg.get("role") == "assistant":
+                tool_calls = msg.get("tool_calls", [])
+                if tool_calls:
+                    # 收集所有 tool_call_id
+                    expected_ids = {tc.get("id") for tc in tool_calls}
+                    # 检查后续是否有对应的 tool 消息
+                    found_ids = set()
+                    j = i + 1
+                    while j < len(messages) and messages[j].get("role") == "tool":
+                        found_ids.add(messages[j].get("tool_call_id"))
+                        j += 1
+
+                    # 检查是否所有 tool_call 都有响应
+                    missing_ids = expected_ids - found_ids
+                    if missing_ids:
+                        # 有未响应的 tool_call，补全错误消息
+                        logger.warning(
+                            "发现未完成的 tool_calls: %s, 补全错误响应",
+                            missing_ids,
+                        )
+                        for call_id in missing_ids:
+                            # 在 assistant 消息后插入错误响应
+                            error_msg = {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": "[系统] 工具调用被中断，请重新描述您的需求。",
+                            }
+                            messages.insert(i + 1 + len(found_ids), error_msg)
+                            cleaned += 1
+            i += 1
+
+        if cleaned > 0:
+            logger.info("清理了 %d 条未完成的 tool_calls 消息", cleaned)
+
+        return cleaned
+
     def add_assistant_message(
         self,
         content: str,

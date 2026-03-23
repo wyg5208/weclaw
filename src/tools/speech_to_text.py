@@ -34,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 # ========== 双引擎条件导入 ==========
 
-# 主引擎: faster-whisper
+# 主引擎: GLM ASR (云端，推荐)
+GLM_ASR_AVAILABLE: bool | None = None
+_glm_asr_client = None
+
+# 备用引擎: faster-whisper
 FASTER_WHISPER_AVAILABLE: bool | None = None
 _faster_whisper_model = None
 
@@ -44,6 +48,29 @@ _whisper = None
 
 # ffmpeg 检测
 FFMPEG_AVAILABLE: bool | None = None
+
+
+def _check_glm_asr() -> bool:
+    """检查 GLM ASR 云端引擎是否可用。"""
+    global GLM_ASR_AVAILABLE, _glm_asr_client
+    if GLM_ASR_AVAILABLE is not None:
+        return GLM_ASR_AVAILABLE
+    
+    try:
+        from src.core.glm_asr_client import GLMASRClient
+        api_key = os.getenv("GLM_ASR_API_KEY")
+        if api_key:
+            _glm_asr_client = GLMASRClient
+            GLM_ASR_AVAILABLE = True
+            logger.debug("GLM ASR 云端引擎可用")
+        else:
+            GLM_ASR_AVAILABLE = False
+            logger.debug("GLM_ASR_API_KEY 未配置")
+    except (ImportError, Exception):
+        GLM_ASR_AVAILABLE = False
+        logger.debug("GLM ASR 不可用")
+    
+    return GLM_ASR_AVAILABLE
 
 
 def _check_faster_whisper() -> bool:
@@ -86,11 +113,14 @@ def _check_ffmpeg() -> bool:
 
 
 def _get_whisper_engine() -> str:
-    """检测可用的 Whisper 引擎。
+    """检测可用的语音识别引擎。
 
     Returns:
-        "faster-whisper", "openai-whisper", 或 "none"
+        "glm-asr", "faster-whisper", "openai-whisper", 或 "none"
     """
+    # 优先使用 GLM ASR 云端引擎
+    if _check_glm_asr():
+        return "glm-asr"
     if _check_faster_whisper():
         return "faster-whisper"
     if _check_openai_whisper():
@@ -567,6 +597,58 @@ class SpeechToTextTool(BaseTool):
             if wav_path != audio_path and wav_path.exists():
                 wav_path.unlink()
 
+    def _transcribe_with_glm_asr(
+        self, audio_path: Path, language: Optional[str] = None
+    ) -> dict[str, Any]:
+        """使用 GLM ASR 云端引擎转录。
+        
+        Args:
+            audio_path: 音频文件路径
+            language: 语言代码（GLM ASR 会自动检测）
+        
+        Returns:
+            转录结果字典
+        """
+        import asyncio
+        
+        # 预处理音频（确保是 16kHz WAV）
+        wav_path = self._preprocess_audio(audio_path)
+        
+        try:
+            # 创建新的事件循环（在线程池中运行）
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                client = _glm_asr_client()
+                result = loop.run_until_complete(
+                    client.transcribe_async(
+                        file_path=str(wav_path),
+                        request_id=f"stt_{datetime.now().strftime('%H%M%S')}",
+                    )
+                )
+                
+                return {
+                    "text": result.text.strip(),
+                    "language": language or "zh",
+                    "engine": "glm-asr",
+                    "request_id": result.request_id,
+                }
+            finally:
+                loop.close()
+        
+        except Exception as e:
+            logger.error(f"GLM ASR 转录失败: {e}")
+            return {
+                "text": "",
+                "error": f"GLM ASR 转录失败: {e}",
+                "engine": "glm-asr",
+            }
+        finally:
+            # 清理临时文件
+            if wav_path != audio_path and wav_path.exists():
+                wav_path.unlink()
+
     def _transcribe_audio_sync(
         self,
         audio_path: Path,
@@ -578,7 +660,10 @@ class SpeechToTextTool(BaseTool):
         self._model_name = model_size
         engine = _get_whisper_engine()
 
-        if engine == "faster-whisper":
+        # 优先使用 GLM ASR 云端引擎
+        if engine == "glm-asr":
+            return self._transcribe_with_glm_asr(audio_path, language)
+        elif engine == "faster-whisper":
             return self._transcribe_with_faster_whisper(audio_path, language, timestamps)
         elif engine == "openai-whisper":
             return self._transcribe_with_openai_whisper(audio_path, language, timestamps)
@@ -604,10 +689,14 @@ class SpeechToTextTool(BaseTool):
             "",
             "请安装以下任一语音识别引擎：",
             "",
-            "【推荐】faster-whisper（更快、更省内存）：",
+            "【推荐】GLM ASR 云端引擎（无需本地模型）：",
+            "  1. 在 .env 中配置 GLM_ASR_API_KEY",
+            "  2. pip install httpx tenacity",
+            "",
+            "【备选】faster-whisper（本地）：",
             "  pip install faster-whisper",
             "",
-            "【备选】openai-whisper：",
+            "【备选】openai-whisper（本地）：",
             "  pip install openai-whisper",
             "",
         ]

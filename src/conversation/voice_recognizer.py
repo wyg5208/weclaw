@@ -32,6 +32,7 @@ class RecognizerEngine(Enum):
     """语音识别引擎枚举。"""
     SPEECH_RECOGNITION = "speech_recognition"  # 使用Google Web Speech API
     WHISPER = "whisper"                        # OpenAI Whisper本地识别
+    GLM_ASR = "glm_asr"                        # 智谱 GLM-ASR 云端识别（推荐）
 
 
 class VoiceRecognizer(QObject):
@@ -130,13 +131,54 @@ class VoiceRecognizer(QObject):
         return lang_map.get(language, language)
 
     def _engine_init(self) -> None:
-        """初始化识别引擎。"""
+        """初始化识别引擎。
+        
+        优先级：GLM ASR > SpeechRecognition > Whisper
+        """
         # Whisper 改为懒加载，不在启动时初始化
         self._whisper_available = False
         self._whisper_model = None
         
-        # 直接尝试使用 speech_recognition
+        # GLM ASR 相关
+        self._glm_asr_available = False
+        self._glm_asr_client = None
+        
+        # 尝试初始化 GLM ASR（优先）
+        if self._init_glm_asr():
+            logger.info("语音识别引擎初始化成功: GLM ASR（云端）")
+            return
+        
+        # 回退到 SpeechRecognition
         self._init_speech_recognition()
+    
+    def _init_glm_asr(self) -> bool:
+        """初始化 GLM ASR 云端引擎。
+        
+        Returns:
+            是否成功初始化
+        """
+        import os
+        
+        try:
+            from src.core.glm_asr_client import GLMASRClient
+            
+            api_key = os.getenv("GLM_ASR_API_KEY")
+            if not api_key:
+                logger.debug("GLM_ASR_API_KEY 未配置，跳过 GLM ASR 初始化")
+                return False
+            
+            self._glm_asr_client = GLMASRClient
+            self._glm_asr_available = True
+            self._active_engine = RecognizerEngine.GLM_ASR
+            logger.info("GLM ASR 云端引擎初始化成功")
+            return True
+            
+        except ImportError:
+            logger.debug("GLM ASR 客户端未安装，跳过初始化")
+            return False
+        except Exception as e:
+            logger.debug(f"GLM ASR 初始化失败: {e}")
+            return False
     
     def _init_whisper(self) -> bool:
         """懒加载 Whisper 模型。
@@ -285,7 +327,11 @@ class VoiceRecognizer(QObject):
         而是通过 self._bg_speech_result.emit() 安全地将结果传递到主线程。
         """
         # 根据不同引擎检查必要组件
-        if self._active_engine == RecognizerEngine.SPEECH_RECOGNITION:
+        if self._active_engine == RecognizerEngine.GLM_ASR:
+            if not self._glm_asr_available or not self._glm_asr_client:
+                logger.error("GLM ASR 组件未正确初始化")
+                return
+        elif self._active_engine == RecognizerEngine.SPEECH_RECOGNITION:
             if not self._recognizer or not self._microphone:
                 logger.error("SpeechRecognition组件未正确初始化")
                 return
@@ -304,7 +350,11 @@ class VoiceRecognizer(QObject):
                     continue
 
                 try:
-                    if self._active_engine == RecognizerEngine.SPEECH_RECOGNITION:
+                    if self._active_engine == RecognizerEngine.GLM_ASR:
+                        self._listen_glm_asr()
+                        # GLM ASR 内部自己循环，退出时跳出外层循环
+                        break
+                    elif self._active_engine == RecognizerEngine.SPEECH_RECOGNITION:
                         self._listen_speech_recognition()
                     elif self._active_engine == RecognizerEngine.WHISPER:
                         self._listen_whisper()
@@ -323,6 +373,163 @@ class VoiceRecognizer(QObject):
             self._bg_speech_error.emit(str(e))
         finally:
             self._is_listening = False
+
+    def _listen_glm_asr(self) -> None:
+        """GLM ASR 云端引擎监听（使用 sounddevice + VAD）。
+        
+        复用 VoiceInputTool 的 VAD 录音逻辑，录音完成后上传到智谱 API。
+        """
+        import asyncio
+        import tempfile
+        import time
+        import sounddevice as sd
+        import numpy as np
+        from scipy.io.wavfile import write as write_wav
+        
+        RATE = 16000
+        CHANNELS = 1
+        CHUNK_DURATION = 0.1  # 每次检测块时长(秒)
+        SILENCE_THRESHOLD = 0.01  # 静音能量阈值
+        SILENCE_DURATION = 1.5    # 静音持续时间(秒)触发停止
+        MIN_RECORDING = 1.0       # 最短录音时长(秒)
+        MAX_RECORDING = 30.0      # 最大录音时长(秒)
+        
+        chunk_samples = int(CHUNK_DURATION * RATE)
+        max_samples = int(MAX_RECORDING * RATE)
+        min_samples = int(MIN_RECORDING * RATE)
+        silence_samples_needed = int(SILENCE_DURATION / CHUNK_DURATION)
+        
+        logger.info("开始 GLM ASR 实时监听 (sounddevice + VAD)...")
+        
+        stream = sd.InputStream(
+            samplerate=RATE,
+            channels=CHANNELS,
+            dtype="float32",
+            blocksize=chunk_samples,
+        )
+        stream.start()
+        
+        all_chunks = []
+        total_samples = 0
+        silence_count = 0
+        has_speech = False
+        
+        try:
+            while not self._stop_event.is_set():
+                if self._is_paused:
+                    self._stop_event.wait(0.1)
+                    continue
+                
+                # 读取音频数据
+                chunk, overflowed = stream.read(chunk_samples)
+                all_chunks.append(chunk.copy())
+                total_samples += len(chunk)
+                
+                # 计算 RMS 能量
+                energy = float(np.sqrt(np.mean(chunk ** 2)))
+                
+                if energy > SILENCE_THRESHOLD:
+                    silence_count = 0
+                    has_speech = True
+                else:
+                    silence_count += 1
+                
+                # VAD 自动停止：已经有语音输入，且连续静音超过阈值
+                if has_speech and total_samples >= min_samples:
+                    if silence_count >= silence_samples_needed:
+                        logger.info("VAD 检测到说话结束（静音 %.1f 秒）", silence_count * CHUNK_DURATION)
+                        break
+                
+                # 达到最大时长
+                if total_samples >= max_samples:
+                    logger.info("达到最大录音时长 %.1f 秒", MAX_RECORDING)
+                    break
+                
+                # 短暂等待
+                self._stop_event.wait(0.05)
+        
+        finally:
+            stream.stop()
+            stream.close()
+        
+        # 检查是否被停止（API 调用期间可能被停止）
+        if self._stop_event.is_set():
+            logger.info("GLM ASR 监听已停止（API调用后）")
+            return
+        
+        # 检查是否有有效语音
+        if not all_chunks or total_samples < min_samples:
+            logger.debug("未检测到有效语音")
+            # 未检测到有效语音时，继续下一轮监听
+            if not self._stop_event.is_set():
+                self._listen_glm_asr()
+            return
+        
+        # 合并音频数据
+        audio_data = np.concatenate(all_chunks, axis=0).flatten().astype(np.float32)
+        actual_duration = len(audio_data) / RATE
+        logger.info("录音完成：实际时长 %.1f 秒，数据长度 %d", actual_duration, len(audio_data))
+        
+        # 再次检查停止状态（避免不必要的 API 调用）
+        if self._stop_event.is_set():
+            logger.info("GLM ASR 监听已停止（合并音频后）")
+            return
+        
+        # 保存为临时 WAV 文件
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+            temp_path = temp_wav.name
+        
+        audio_int16 = (np.clip(audio_data, -1.0, 1.0) * 32767).astype(np.int16)
+        write_wav(temp_path, RATE, audio_int16)
+        logger.info("临时 WAV 文件已保存：%s", temp_path)
+        
+        # 调用 GLM ASR API（异步）
+        try:
+            # 创建新的事件循环（在后台线程中）
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                client = self._glm_asr_client()
+                result = loop.run_until_complete(
+                    client.transcribe_async(
+                        file_path=temp_path,
+                        request_id=f"continuous_{time.time()}",
+                    )
+                )
+                
+                text = result.text.strip()
+                if text:
+                    text = to_simplified_chinese(text)
+                    logger.info("GLM ASR 识别结果：%s", text)
+                    # 安全发射（通过 QueuedConnection 到主线程）
+                    self._bg_speech_result.emit(text, True)
+            
+            finally:
+                loop.close()
+                # 清理临时文件
+                try:
+                    import os
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+        
+        except Exception as e:
+            logger.error("GLM ASR 识别错误：%s", e)
+            self._bg_speech_error.emit(f"GLM ASR 识别失败：{e}")
+        
+        # 如果未被停止，继续下一轮监听
+        if not self._stop_event.is_set():
+            logger.info("GLM ASR 继续下一轮监听...")
+            # 重置状态
+            all_chunks = []
+            total_samples = 0
+            silence_count = 0
+            has_speech = False
+            # 递归调用继续监听
+            self._listen_glm_asr()
+        else:
+            logger.info("GLM ASR 监听循环结束")
 
     def _listen_speech_recognition(self) -> None:
         """SpeechRecognition 引擎监听（单次，在外层循环中反复调用）。"""

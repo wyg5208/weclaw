@@ -58,12 +58,17 @@ class GuiAgent(QObject):
     tool_call_finished = Signal(str, str, str)  # (tool_name, action, result_preview)
     error_occurred = Signal(str)  # 错误信息
     usage_updated = Signal(int, int, float)  # (input_tokens, output_tokens, cost)
-    tts_requested = Signal(str)  # 请求 TTS 朗读
+    tts_requested = Signal(str)  # 请求 TTS 朗读（完整文本）
+    tts_stream_requested = Signal(str)  # 请求流式 TTS 朗读（累积文本片段）
+    streaming_tts_started = Signal()  # 流式 TTS 开始（暂停监听）
+    streaming_tts_finished = Signal()  # 流式 TTS 结束（恢复监听）
     reasoning_started = Signal()  # 思考过程开始
     reasoning_chunk = Signal(str)  # 思考内容块
     reasoning_finished = Signal()  # 思考过程完成
     cron_job_status = Signal(str, str, str)  # (job_id, status, description) 定时任务状态
     companion_care_message = Signal(str, str)  # (message, interaction_type) 陪伴消息
+    deferred_tool_result = Signal(str)  # CFTA: 后台工具执行结果摘要
+    deferred_tool_started = Signal()  # CFTA: 后台工具开始执行
 
     def __init__(self, agent: Agent, model_registry: ModelRegistry) -> None:
         super().__init__()
@@ -72,6 +77,7 @@ class GuiAgent(QObject):
         self._tts_enabled = False  # TTS 开关状态
         self._cron_sub_ids: list[tuple[str, int]] = []  # 定时任务事件订阅ID
         self._companion_sub_ids: list[tuple[str, int]] = []  # 陪伴事件订阅ID
+        self._deferred_task: asyncio.Task | None = None  # CFTA: 当前后台工具任务
         
         # 订阅定时任务事件
         self._subscribe_cron_events()
@@ -134,6 +140,7 @@ class GuiAgent(QObject):
 
         try:
             full_content = ""
+            stream_buffer = ""  # 流式 TTS 缓冲器
 
             # 订阅工具调用事件，实时通知 UI
             _tool_sub_ids: list[tuple[str, int]] = []
@@ -162,6 +169,26 @@ class GuiAgent(QObject):
                     self.reasoning_finished.emit()
                     _reasoning_started = False
 
+            def _extract_complete_sentences(buffer: str) -> tuple[str, str]:
+                """提取完整的句子，返回(已播放部分, 剩余部分)。
+                
+                句子以句号、逗号、感叹号、分号、问号结尾。
+                """
+                import re
+                # 匹配到句子结束符为止的最长文本
+                pattern = r'^([^，。！？；]+[，。！？；])+'
+                match = re.match(pattern, buffer)
+                if match:
+                    complete = match.group()
+                    remaining = buffer[len(complete):]
+                    return complete, remaining
+                # 如果没有完整句子，检查是否有较长的片段（超过80字符也播放）
+                if len(buffer) > 80:
+                    return buffer, ""
+                return "", buffer
+
+            _streaming_tts_started = False  # 是否已发出流式TTS开始信号
+
             sub_tc = self._agent.event_bus.on("tool_call", _on_tool_call)
             sub_tr = self._agent.event_bus.on("tool_result", _on_tool_result)
             sub_rn = self._agent.event_bus.on("model_reasoning", _on_reasoning)
@@ -173,6 +200,17 @@ class GuiAgent(QObject):
                 async for chunk in self._agent.chat_stream(message):
                     full_content += chunk
                     self.message_chunk.emit(chunk)
+                    
+                    # 流式 TTS：按句子分割文本
+                    if self._tts_enabled:
+                        stream_buffer += chunk
+                        complete, stream_buffer = _extract_complete_sentences(stream_buffer)
+                        if complete:
+                            # 首次流式 TTS 时发出开始信号
+                            if not _streaming_tts_started:
+                                self.streaming_tts_started.emit()
+                                _streaming_tts_started = True
+                            self.tts_stream_requested.emit(complete)
             finally:
                 # 取消工具事件订阅
                 for evt_name, sub_id in _tool_sub_ids:
@@ -180,12 +218,22 @@ class GuiAgent(QObject):
                 # 确保思考过程标记为完成
                 if _reasoning_started:
                     self.reasoning_finished.emit()
+            
+            # 流式 TTS：播放剩余缓冲文本
+            if self._tts_enabled and stream_buffer:
+                if not _streaming_tts_started:
+                    self.streaming_tts_started.emit()
+                    _streaming_tts_started = True
+                self.tts_stream_requested.emit(stream_buffer)
 
             if full_content:
                 self.message_finished.emit(full_content)
 
-                # 如果 TTS 开启,请求朗读
-                if self._tts_enabled:
+                # 流式 TTS 结束，通知可以恢复监听了
+                if self._tts_enabled and _streaming_tts_started:
+                    self.streaming_tts_finished.emit()
+                elif self._tts_enabled:
+                    # 仅在非流式模式下（无句子被流式播放时）才请求完整朗读
                     self.tts_requested.emit(full_content)
 
             # 更新用量
@@ -199,6 +247,150 @@ class GuiAgent(QObject):
         except Exception as e:
             logger.error("Agent chat 失败: %s", e, exc_info=True)
             self.error_occurred.emit(str(e))
+
+    # ------------------------------------------------------------------
+    # CFTA: Chat-First, Tools-Async — 语音模式快速聊天 + 异步工具
+    # ------------------------------------------------------------------
+
+    async def chat_voice(self, message: str) -> None:
+        """CFTA 语音模式聊天入口。
+
+        根据意图识别置信度三级分流：
+        - confidence == 0   → 路径1: 纯聊天快速路径
+        - 0 < conf < 0.5    → 路径2: 快速聊天 + 异步工具检测
+        - conf >= 0.5       → 路径3: 快速口语确认 + 标准工具流程
+        """
+        from src.core.prompts import detect_intent_with_confidence
+
+        # 取消上一次未完成的后台工具任务
+        self._cancel_deferred_task()
+
+        intent_result = detect_intent_with_confidence(message)
+        logger.info(
+            "[CFTA] 语音模式意图分流: confidence=%.2f, primary=%s, intents=%s",
+            intent_result.confidence, intent_result.primary_intent, intent_result.intents,
+        )
+
+        if intent_result.confidence >= 0.5:
+            # 路径3: 明确需要工具 — 快速口语确认 + 标准工具流程
+            await self._chat_voice_path3(message)
+        else:
+            # 路径1/2: 快速聊天（无工具）
+            await self._chat_voice_fast(message, intent_result.confidence)
+
+    async def _chat_voice_fast(self, message: str, confidence: float) -> None:
+        """CFTA 路径1/2: 快速聊天（无工具），可选异步工具检测。"""
+        import re
+
+        self.message_started.emit()
+
+        try:
+            full_content = ""
+            stream_buffer = ""
+            _streaming_tts_started = False
+
+            def _extract_complete_sentences(buffer: str) -> tuple[str, str]:
+                pattern = r'^([^，。！？；]+[，。！？；])+'
+                match = re.match(pattern, buffer)
+                if match:
+                    complete = match.group()
+                    remaining = buffer[len(complete):]
+                    return complete, remaining
+                if len(buffer) > 80:
+                    return buffer, ""
+                return "", buffer
+
+            async for chunk in self._agent.chat_stream_voice_fast(message):
+                full_content += chunk
+                self.message_chunk.emit(chunk)
+
+                # 流式 TTS
+                if self._tts_enabled:
+                    stream_buffer += chunk
+                    complete, stream_buffer = _extract_complete_sentences(stream_buffer)
+                    if complete:
+                        if not _streaming_tts_started:
+                            self.streaming_tts_started.emit()
+                            _streaming_tts_started = True
+                        self.tts_stream_requested.emit(complete)
+
+            # 流式 TTS：播放剩余缓冲
+            if self._tts_enabled and stream_buffer:
+                if not _streaming_tts_started:
+                    self.streaming_tts_started.emit()
+                    _streaming_tts_started = True
+                self.tts_stream_requested.emit(stream_buffer)
+
+            if full_content:
+                self.message_finished.emit(full_content)
+
+                if self._tts_enabled and _streaming_tts_started:
+                    self.streaming_tts_finished.emit()
+                elif self._tts_enabled:
+                    self.tts_requested.emit(full_content)
+
+            # 更新用量
+            cost = self._model_registry.total_cost
+            prompt_tokens = self._model_registry.total_prompt_tokens
+            completion_tokens = self._model_registry.total_completion_tokens
+            self.usage_updated.emit(prompt_tokens, completion_tokens, cost)
+
+            # 路径2: 如果有意图线索，后台异步工具检测
+            if confidence > 0:
+                logger.info(
+                    "[CFTA] 路径2: 启动异步工具检测 (confidence=%.2f)", confidence,
+                )
+                self._deferred_task = asyncio.create_task(
+                    self._process_deferred_tools(message, full_content)
+                )
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("[CFTA] 快速聊天失败: %s", e, exc_info=True)
+            self.error_occurred.emit(str(e))
+
+    async def _chat_voice_path3(self, message: str) -> None:
+        """CFTA 路径3: 快速口语确认 + 标准工具流程。"""
+        # 先发送一句快速确认
+        ack_text = "好的，让我来处理。"
+        self.message_started.emit()
+        self.message_chunk.emit(ack_text)
+
+        if self._tts_enabled:
+            self.streaming_tts_started.emit()
+            self.tts_stream_requested.emit(ack_text)
+
+        # 然后走标准工具流程（复用现有 chat 方法）
+        await self.chat(message)
+
+    async def _process_deferred_tools(
+        self, message: str, fast_reply: str
+    ) -> None:
+        """CFTA Phase 2: 后台异步工具处理（fire-and-forget task）。"""
+        try:
+            session_id = self._agent.session_manager.current_session.id
+            self.deferred_tool_started.emit()
+
+            result = await self._agent.process_deferred_tools(
+                message, fast_reply, session_id,
+            )
+            if result:
+                self.deferred_tool_result.emit(result)
+                logger.info("[CFTA] 异步工具完成，结果已推送到 UI")
+        except asyncio.CancelledError:
+            logger.info("[CFTA] 异步工具任务被取消")
+        except Exception as e:
+            logger.error("[CFTA] 异步工具处理失败: %s", e, exc_info=True)
+
+    def _cancel_deferred_task(self) -> None:
+        """CFTA: 取消当前后台工具任务。"""
+        if self._deferred_task and not self._deferred_task.done():
+            self._deferred_task.cancel()
+            logger.info("[CFTA] 已取消上一次后台工具任务")
+        self._deferred_task = None
+        # 同时取消 Agent 层的后台任务
+        self._agent.cancel_deferred_tools()
 
 
 class WinClawGuiApp:
@@ -551,6 +743,7 @@ class WinClawGuiApp:
 
         # 用户发送消息 → 触发 Agent chat
         self._window.message_sent.connect(self._on_user_message)
+        self._window.voice_message_sent.connect(self._on_voice_message)  # CFTA
         self._window.message_with_attachments.connect(self._on_user_message_with_attachments)
 
         # 停止按钮
@@ -657,9 +850,20 @@ class WinClawGuiApp:
         
         # 陪伴消息显示
         self._gui_agent.companion_care_message.connect(self._on_companion_care)
+
+        # CFTA: 后台工具状态显示
+        self._gui_agent.deferred_tool_started.connect(
+            lambda: safe_add_tool_log("🔄 后台检测工具需求中...")
+        )
+        self._gui_agent.deferred_tool_result.connect(self._on_deferred_tool_result)
         
         # TTS 朗读
         self._gui_agent.tts_requested.connect(self._on_tts_speak)
+        # 流式 TTS 朗读（边生成边播放）
+        self._gui_agent.tts_stream_requested.connect(self._on_tts_stream_speak)
+        # 流式 TTS 开始/结束（控制是否重启监听）
+        self._gui_agent.streaming_tts_started.connect(self._on_streaming_tts_started)
+        self._gui_agent.streaming_tts_finished.connect(self._on_streaming_tts_finished)
 
         # 设置对话框
         self._window.settings_requested.connect(self._open_settings)
@@ -780,6 +984,14 @@ class WinClawGuiApp:
 
         # 运行 Agent chat 任务，并跟踪当前任务
         self._current_chat_task = self._task_runner.run("chat", self._gui_agent.chat(message))
+
+    def _on_voice_message(self, message: str) -> None:
+        """CFTA: 处理语音模式消息，走快速聊天路径。"""
+        if not self._gui_agent or not self._task_runner:
+            return
+        self._current_chat_task = self._task_runner.run(
+            "chat_voice", self._gui_agent.chat_voice(message)
+        )
     
     def _on_stop(self) -> None:
         """停止当前运行的任务。"""
@@ -1909,6 +2121,16 @@ class WinClawGuiApp:
         
         logger.info("陪伴消息已显示: %s", message[:50])
 
+    def _on_deferred_tool_result(self, result_summary: str) -> None:
+        """CFTA: 后台工具执行结果显示。"""
+        if not self._window:
+            return
+        # 在聊天区域追加工具结果消息（带特殊标识）
+        display_msg = f"📦 [后台任务完成]\n{result_summary}"
+        self._window.add_ai_message(display_msg)
+        self._window.add_tool_log("✅ 后台工具执行完成")
+        logger.info("[CFTA] 后台工具结果已显示")
+
     def _on_agent_message_finished(self, full_content: str) -> None:
         """Agent 消息生成完成回调。"""
         if not self._window:
@@ -1940,6 +2162,36 @@ class WinClawGuiApp:
             self._window._on_conversation_play_tts(text)
         else:
             logger.warning("TTSPlayer 未初始化，TTS 请求被忽略")
+
+    def _on_tts_stream_speak(self, text: str) -> None:
+        """处理流式 TTS 朗读请求（边生成边播放）。
+
+        与普通 TTS 的区别：
+        - 使用 enqueue() 加入队列，句子按顺序连续播放，不互相打断
+        - 不用 speak()（后者会清空队列并打断当前播放）
+        """
+        if not self._window or not self._tts_enabled:
+            return
+        
+        if self._window._tts_player:
+            # 流式模式：入队而非打断
+            self._window._tts_player.enqueue(text)
+            if self._window._conversation_mgr:
+                self._window._conversation_mgr.on_tts_start()
+        else:
+            logger.warning("TTSPlayer 未初始化，流式 TTS 请求被忽略")
+
+    def _on_streaming_tts_started(self) -> None:
+        """流式 TTS 开始播放，通知 ConversationManager 暂停监听重启。"""
+        if self._window and self._window._conversation_mgr:
+            self._window._conversation_mgr.set_streaming_tts_active(True)
+
+    def _on_streaming_tts_finished(self) -> None:
+        """流式 TTS 播放结束，通知 ConversationManager 恢复监听。"""
+        if self._window and self._window._conversation_mgr:
+            self._window._conversation_mgr.set_streaming_tts_active(False)
+            # 手动触发监听恢复
+            self._window._conversation_mgr.on_tts_finished()
 
     async def _speak_text(self, text: str) -> None:
         """朗读文本。"""

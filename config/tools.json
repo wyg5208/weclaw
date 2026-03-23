@@ -522,6 +522,25 @@
       },
       "actions": ["update_profile", "query_profile", "add_family_member", "update_family_member", "add_social_contact", "query_contacts", "get_upcoming_birthdays", "record_child_growth"]
     },
+    "family_member": {
+      "enabled": true,
+      "module": "src.tools.family_member",
+      "class": "FamilyMemberTool",
+      "display": {
+        "name": "家庭成员管理",
+        "emoji": "👨‍👩‍👧‍👦",
+        "description": "创建、查询、编辑和删除家庭成员档案，管理家庭关系和重要日期",
+        "category": "life"
+      },
+      "config": {
+        "db_path": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["create_member", "query_members", "update_member", "delete_member", "get_family_tree"]
+    },
     "knowledge_rag": {
       "enabled": true,
       "module": "src.tools.knowledge_rag",
@@ -934,6 +953,26 @@
       },
       "actions": ["transcribe_audio", "transcribe_file", "batch_transcribe"]
     },
+    "document_scanner": {
+      "enabled": true,
+      "module": "src.tools.document_scanner",
+      "class": "DocumentScannerTool",
+      "display": {
+        "name": "高拍仪扫描",
+        "emoji": "📷",
+        "description": "高拍仪文档智能扫描与解析，支持试卷作业批改（GLM-4.6V）",
+        "category": "productivity"
+      },
+      "config": {
+        "db_path": "~/.weclaw/scanner.db",
+        "scan_folder": "D:/python_projects/weclaw/docs/deli_scan_image"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["scan_file", "scan_folder", "query_history", "clear_cache"]
+    },
     "education_tool": {
       "enabled": true,
       "module": "src.tools.education_tool",
@@ -971,6 +1010,44 @@
         "require_confirmation": true
       },
       "actions": ["generate_code_template", "analyze_code", "generate_tests", "format_code"]
+    },
+    "course_schedule": {
+      "enabled": true,
+      "module": "src.tools.course_schedule",
+      "class": "CourseScheduleTool",
+      "display": {
+        "name": "课程表",
+        "emoji": "📅",
+        "description": "家庭成员课程表管理：创建、查询、编辑、删除周课程表",
+        "category": "life"
+      },
+      "config": {
+        "schedules_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["create_schedule", "query_schedule", "add_course", "edit_course", "delete_course"]
+    },
+    "meal_menu": {
+      "enabled": true,
+      "module": "src.tools.meal_menu",
+      "class": "MealMenuTool",
+      "display": {
+        "name": "食谱管理",
+        "emoji": "🍽️",
+        "description": "家庭成员营养食谱管理：创建、查询、编辑、删除学校食谱和家庭食谱，支持图片解析",
+        "category": "life"
+      },
+      "config": {
+        "menus_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["create_menu", "query_menu", "add_dish", "edit_dish", "delete_dish", "parse_image", "list_menus"]
     }
   },
   "categories": {

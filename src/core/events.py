@@ -63,6 +63,10 @@ class EventType:
     COMPANION_PROFILE_UPDATED = "companion:profile_updated"
     COMPANION_MOOD_DETECTED = "companion:mood_detected"
 
+    # --- CFTA: 异步工具执行 (Chat-First, Tools-Async) ---
+    DEFERRED_TOOL_STARTED = "deferred_tool_started"    # 后台异步工具开始
+    DEFERRED_TOOL_RESULT = "deferred_tool_result"      # 后台异步工具结果
+
 
 # =====================================================================
 # 事件数据结构
@@ -223,3 +227,18 @@ class CompanionMoodEvent:
     sub_mood: str = ""           # stressed/tired/...
     confidence: float = 0.5
     source_text: str = ""
+
+
+@dataclass
+class DeferredToolStartedEvent:
+    """CFTA: 后台异步工具开始事件。"""
+    user_input: str              # 原始用户输入
+    session_id: str = ""
+
+
+@dataclass
+class DeferredToolResultEvent:
+    """CFTA: 后台异步工具执行结果事件。"""
+    result_summary: str          # 工具执行结果摘要
+    tool_names: list[str] = field(default_factory=list)  # 执行过的工具名列表
+    session_id: str = ""

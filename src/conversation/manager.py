@@ -107,6 +107,9 @@ class ConversationManager(QObject):
 
         # 识别中的文本
         self._current_text = ""
+        
+        # 流式 TTS 标志：流式播放期间不重启监听
+        self._streaming_tts_active = False
 
     # ========== 属性 ==========
 
@@ -235,10 +238,19 @@ class ConversationManager(QObject):
         """TTS播放完成回调。"""
         self._set_state(ConversationState.CHATTING)
         self.tts_finished.emit()
-        # 重新启动监听
-        if self._mode != ConversationMode.OFF:
+        # 重新启动监听（仅当不在流式播放期间）
+        if self._mode != ConversationMode.OFF and not self._streaming_tts_active:
             self._start_listening()
             self._reset_silence_timer()
+
+    def set_streaming_tts_active(self, active: bool) -> None:
+        """设置流式 TTS 播放状态。
+        
+        Args:
+            active: True 表示流式播放进行中，False 表示流式播放结束
+        """
+        self._streaming_tts_active = active
+        logger.debug(f"流式TTS状态: {active}")
 
     def cancel_current_input(self) -> None:
         """取消当前输入。"""
@@ -298,6 +310,10 @@ class ConversationManager(QObject):
             original_text = self._current_text
             self._current_text = ""
             self._set_state(ConversationState.THINKING)
+
+            # 【关键修复】切换到 THINKING 状态时立即停止语音监听
+            # 避免捕获 AI 的 TTS 播放声音
+            self._stop_listening()
 
             # 检查是否是对话模式
             is_voice_mode = self._mode != ConversationMode.OFF

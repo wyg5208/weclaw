@@ -721,7 +721,8 @@ class MessageBubble(QFrame):
         if cls._tts_player is None:
             try:
                 from ..conversation.tts_player import TTSPlayer, TTSEngine
-                cls._tts_player = TTSPlayer(engine=TTSEngine.PYTTSX3)
+                # 优先使用 Edge TTS（速度快、质量高）
+                cls._tts_player = TTSPlayer(engine=TTSEngine.EDGE_TTS)
             except Exception:
                 return None
         return cls._tts_player

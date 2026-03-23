@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
 
     # 信号
     message_sent = Signal(str)  # 用户发送的消息
+    voice_message_sent = Signal(str)  # CFTA: 语音模式发送的消息（走快速聊天路径）
     message_with_attachments = Signal(str, list)  # 用户发送的消息 + 附件列表
     attachment_requested = Signal()  # 请求添加附件
     image_selected = Signal(str)  # 图片文件路径被选择 (兼容旧版)
@@ -229,10 +230,10 @@ class MainWindow(QMainWindow):
         self._conversation_mgr.silence_warning.connect(self._on_silence_warning)
         self._conversation_mgr.silence_timeout.connect(self._on_silence_timeout)
 
-        # 初始化TTS播放器
+        # 初始化TTS播放器（优先使用 Edge TTS，速度快质量高）
         self._tts_player: TTSPlayer | None = None
         try:
-            self._tts_player = TTSPlayer()
+            self._tts_player = TTSPlayer(engine=TTSEngine.EDGE_TTS)
             self._tts_player.playback_finished.connect(self._on_tts_playback_finished)
             logger.info("TTS播放器初始化成功")
         except Exception as e:
@@ -504,8 +505,8 @@ class MainWindow(QMainWindow):
         """
         if is_voice_mode:
             logger.info(f"发送带提示词的文本给AI: {text[:50]}...")
-            # 发送带提示词的文本给AI
-            self.message_sent.emit(text)
+            # CFTA: 语音模式使用专用信号，走快速聊天路径
+            self.voice_message_sent.emit(text)
 
     def _on_silence_warning(self, remaining: int) -> None:
         """沉默警告回调。"""

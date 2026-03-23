@@ -81,7 +81,13 @@ def get_known_prefixes() -> set[str]:
         "browser_use", "app_control", "voice_input", "voice_output",
         "datetime_tool", "chat_history", "doc_generator",
         "image_generator", "python_runner", "tool_info",
-        "knowledge_rag", "batch_paper_analyzer",
+        "knowledge_rag", "batch_paper_analyzer", "user_profile",
+        "course_schedule", "mind_map", "resume_builder", "data_processor",
+        "coding_assistant", "data_visualization", "speech_to_text",
+        "format_converter", "id_photo", "literature_search", "pdf_tool",
+        "gif_maker", "ai_writer", "education_tool", "ppt_generator",
+        "financial_report", "contract_generator", "family_member", "meal_menu",
+        "document_scanner",  # 高拍仪文档扫描
     }
 
 

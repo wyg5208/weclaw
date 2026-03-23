@@ -239,6 +239,10 @@ class ToolRegistry:
             kwargs["output_dir"] = tool_config.get("output_dir", "generated")
         elif tool_name == "user_profile":
             kwargs["db_path"] = tool_config.get("db_path", "")
+        elif tool_name == "family_member":
+            kwargs["db_path"] = tool_config.get("db_path", "")
+        elif tool_name == "course_schedule":
+            kwargs["schedules_dir"] = tool_config.get("schedules_dir", "")
                 
         return kwargs
 

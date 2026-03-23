@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }} - WeClaw 管理后台</title>
+    <script src="/admin/cdn_resources/tailwindcss.js"></script>
+    <script src="/admin/cdn_resources/chart.js"></script>
+    <style>
+        /* 赛博朋克风格配色 */
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --accent-cyan: #06b6d4;
+            --accent-pink: #ec4899;
+            --accent-purple: #8b5cf6;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+        }
+        
+        body {
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        
+        .cyber-card {
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+            backdrop-filter: blur(10px);
+        }
+        
+        .cyber-button {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            transition: all 0.3s ease;
+        }
+        
+        .cyber-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(6, 182, 212, 0.3);
+        }
+        
+        .nav-link {
+            position: relative;
+            transition: color 0.3s ease;
+        }
+        
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--accent-cyan);
+            transition: width 0.3s ease;
+        }
+        
+        .nav-link:hover::after {
+            width: 100%;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.1), rgba(139, 92, 246, 0.1));
+            border-left: 4px solid var(--accent-cyan);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        th {
+            background: rgba(6, 182, 212, 0.1);
+            color: var(--accent-cyan);
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: rgba(6, 182, 212, 0.05);
+        }
+    </style>
+</head>
+<body class="font-sans">
+    <!-- 顶部导航栏 -->
+    <nav class="border-b border-cyan-500/20 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- Logo -->
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 bg-gradient-to-br from-cyan-400 to-purple-500 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold">W</span>
+                    </div>
+                    <span class="text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent">
+                        WeClaw Admin
+                    </span>
+                </div>
+                
+                <!-- 导航链接 -->
+                <div class="hidden md:flex items-center space-x-6">
+                    <a href="/admin/dashboard" class="nav-link text-gray-300 hover:text-cyan-400">仪表盘</a>
+                    <a href="/admin/users" class="nav-link text-gray-300 hover:text-cyan-400">用户管理</a>
+                    <a href="/admin/devices" class="nav-link text-gray-300 hover:text-cyan-400">设备管理</a>
+                    <a href="/admin/logs" class="nav-link text-gray-300 hover:text-cyan-400">日志中心</a>
+                    <a href="/admin/statistics" class="nav-link text-gray-300 hover:text-cyan-400">统计分析</a>
+                </div>
+                
+                <!-- 用户信息 -->
+                <div class="flex items-center space-x-4">
+                    <span class="text-sm text-gray-400">管理员：{{ current_user }}</span>
+                    <a href="javascript:void(0)" onclick="adminLogout()" class="text-sm text-pink-400 hover:text-pink-300">退出</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- 主内容区 -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {% block content %}{% endblock %}
+    </main>
+    
+    <!-- 页脚 -->
+    <footer class="border-t border-cyan-500/20 mt-12 py-6">
+        <div class="max-w-7xl mx-auto px-4 text-center text-gray-500 text-sm">
+            <p>WeClaw 管理后台 v1.0.0 | Powered by FastAPI & TailwindCSS</p>
+        </div>
+    </footer>
+    
+    {% block scripts %}{% endblock %}
+    
+    <script>
+        // 管理员登出：清除 token 后跳转到登录页
+        function adminLogout() {
+            localStorage.removeItem('admin_token');
+            window.location.href = '/admin/login';
+        }
+    </script>
+</body>
+</html>

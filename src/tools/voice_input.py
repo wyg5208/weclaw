@@ -1,4 +1,4 @@
-"""语音输入工具 - 基于 Whisper 的语音转文字
+"""语音输入工具 - 支持 Whisper 和 GLM ASR 双引擎
 
 支持:
 - 实时录音（直接传 numpy 数组给 Whisper，无需 ffmpeg）
@@ -7,6 +7,7 @@
 - VAD 语音活动检测，说完自动停止
 - 多语言识别
 - 可选模型大小 (tiny/base/small/medium/large)
+- GLM ASR 云端识别（高精度、免依赖）
 
 Phase 4.6 优化：
 - 延迟导入：whisper/sounddevice/numpy/scipy 仅在实际使用时导入
@@ -15,7 +16,11 @@ Phase 4.6 优化：
 Phase 7.0 优化：
 - 新增 record_audio 动作：纯录音生成 WAV 文件
 - VAD（Voice Activity Detection）智能停止：说完自动停止录音
-- 移除固定5秒限制，支持灵活时长
+- 移除固定 5 秒限制，支持灵活时长
+
+v2.15.0 新增：
+- GLM ASR 云端识别引擎
+- 支持 engine 参数选择 whisper/glm-asr
 """
 import asyncio
 import logging
@@ -30,8 +35,10 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 # 延迟导入标记
-VOICE_AVAILABLE: bool | None = None
+VOICE_AVAILABLE: bool | None = None  # Whisper 识别引擎
+RECORD_AVAILABLE: bool | None = None  # 录音功能（sounddevice 等）
 FFMPEG_AVAILABLE: bool | None = None
+GLM_ASR_AVAILABLE: bool | None = None
 
 # 模块引用（延迟加载后赋值）
 _whisper = None
@@ -39,6 +46,35 @@ _sd = None
 _np = None
 _read_wav = None
 _write_wav = None
+_glm_asr_client = None
+
+
+def _check_record_dependencies() -> bool:
+    """检查录音依赖是否可用（sounddevice, numpy, scipy）。"""
+    global RECORD_AVAILABLE, _sd, _np, _read_wav, _write_wav
+    if RECORD_AVAILABLE is not None:
+        return RECORD_AVAILABLE
+    
+    try:
+        import sounddevice as sd
+        import numpy as np
+        from scipy.io.wavfile import read as read_wav
+        from scipy.io.wavfile import write as write_wav
+        
+        _sd = sd
+        _np = np
+        _read_wav = read_wav
+        _write_wav = write_wav
+        RECORD_AVAILABLE = True
+        logger.debug("录音依赖加载成功")
+    except (ImportError, TypeError, OSError) as e:
+        RECORD_AVAILABLE = False
+        logger.error(f"录音依赖加载失败：{e}")
+    except Exception as e:
+        RECORD_AVAILABLE = False
+        logger.error(f"录音依赖加载异常：{e}")
+    
+    return RECORD_AVAILABLE
 
 
 def _check_voice_dependencies() -> bool:
@@ -46,14 +82,14 @@ def _check_voice_dependencies() -> bool:
     global VOICE_AVAILABLE, _whisper, _sd, _np, _read_wav, _write_wav
     if VOICE_AVAILABLE is not None:
         return VOICE_AVAILABLE
-
+    
     try:
         import whisper
         import sounddevice as sd
         import numpy as np
         from scipy.io.wavfile import read as read_wav
         from scipy.io.wavfile import write as write_wav
-
+        
         _whisper = whisper
         _sd = sd
         _np = np
@@ -61,10 +97,17 @@ def _check_voice_dependencies() -> bool:
         _write_wav = write_wav
         VOICE_AVAILABLE = True
         logger.debug("语音依赖加载成功")
-    except ImportError:
+    except (ImportError, TypeError, OSError) as e:
+        # Whisper 在某些 Windows 环境下可能因为 ctypes 问题加载失败
+        # 这是已知问题，建议用户使用 GLM ASR 引擎
         VOICE_AVAILABLE = False
+        logger.warning(f"Whisper 加载失败：{e}")
+        logger.warning("建议使用 GLM ASR 云端引擎（设置 VOICE_RECOGNITION_ENGINE=glm-asr）")
         logger.debug("语音依赖不可用")
-
+    except Exception as e:
+        VOICE_AVAILABLE = False
+        logger.error(f"语音依赖加载异常：{e}")
+    
     return VOICE_AVAILABLE
 
 
@@ -74,6 +117,33 @@ def _check_ffmpeg() -> bool:
     if FFMPEG_AVAILABLE is None:
         FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
     return FFMPEG_AVAILABLE
+
+
+def _check_glm_asr() -> bool:
+    """检查 GLM ASR 是否可用。"""
+    global GLM_ASR_AVAILABLE, _glm_asr_client
+    if GLM_ASR_AVAILABLE is not None:
+        return GLM_ASR_AVAILABLE
+    
+    try:
+        from src.core.glm_asr_client import GLMASRClient
+        api_key = os.getenv("GLM_ASR_API_KEY")
+        if not api_key:
+            logger.warning("GLM_ASR_API_KEY 未配置，GLM ASR 不可用")
+            GLM_ASR_AVAILABLE = False
+            return False
+        
+        _glm_asr_client = GLMASRClient
+        GLM_ASR_AVAILABLE = True
+        logger.debug("GLM ASR 引擎可用")
+    except ImportError:
+        logger.debug("GLM ASR 客户端未安装")
+        GLM_ASR_AVAILABLE = False
+    except Exception as e:
+        logger.debug(f"GLM ASR 初始化失败：{e}")
+        GLM_ASR_AVAILABLE = False
+    
+    return GLM_ASR_AVAILABLE
 
 
 from .base import ActionDef, BaseTool, ToolResult, ToolResultStatus
@@ -102,13 +172,15 @@ class VoiceInputTool(BaseTool):
         self._sample_rate: int = 16000
         # 录音中止标志（供外部停止录音）
         self._stop_recording = False
+        # 默认使用 GLM ASR 云端引擎（无需本地依赖），可配置切换到 Whisper
+        self._engine = os.getenv("VOICE_RECOGNITION_ENGINE", "glm-asr").lower()
         # 不在初始化时检查依赖，延迟到实际使用时
 
     def _check_available(self) -> bool:
         """检查语音功能是否可用。"""
-        if not _check_voice_dependencies():
+        if not _check_record_dependencies():
             raise ImportError(
-                "语音功能不可用。请安装依赖: pip install openai-whisper sounddevice scipy"
+                "录音功能不可用。请安装依赖：pip install sounddevice scipy"
             )
         return True
 
@@ -133,12 +205,18 @@ class VoiceInputTool(BaseTool):
                     },
                     "auto_stop": {
                         "type": "boolean",
-                        "description": "是否启用VAD自动检测说话结束,默认True",
+                        "description": "是否启用 VAD 自动检测说话结束，默认 True",
                         "default": True,
+                    },
+                    "engine": {
+                        "type": "string",
+                        "description": "识别引擎：glm-asr(云端，推荐) 或 whisper(本地)",
+                        "default": "glm-asr",
+                        "enum": ["glm-asr", "whisper"],
                     },
                     "model": {
                         "type": "string",
-                        "description": "Whisper 模型 (tiny/base/small/medium/large),默认 base",
+                        "description": "Whisper 模型 (tiny/base/small/medium/large),默认 base (仅 whisper 引擎)",
                         "default": "base",
                         "enum": ["tiny", "base", "small", "medium", "large"],
                     },
@@ -303,25 +381,40 @@ class VoiceInputTool(BaseTool):
 
     async def _record_and_transcribe(
         self, duration: float = 30.0, auto_stop: bool = True,
-        model: str = "base", language: Optional[str] = None
+        engine: Optional[str] = None, model: str = "base", language: Optional[str] = None
     ) -> ToolResult:
         """录制音频并转文字（支持 VAD 自动停止）。
-
+    
         Args:
-            duration: 最大录音时长(秒), VAD模式下为上限
+            duration: 最大录音时长 (秒), VAD 模式下为上限
             auto_stop: 是否启用 VAD 自动检测说话结束
-            model: Whisper 模型
+            engine: 识别引擎 whisper/glm-asr，默认 glm-asr（云端）
+            model: Whisper 模型 (仅 whisper 引擎)
             language: 语言代码
         """
+        # 如果未指定引擎，使用实例默认值（可通过环境变量配置）
+        if engine is None:
+            engine = self._engine
+        
+        logger.info("初始 engine 参数：%s, 实例默认引擎：%s, 最终 engine: %s", 
+                    engine if engine else "None", self._engine, engine)
+        
         try:
-            # 检查依赖
+            # 检查录音依赖（任何引擎都需要录音功能）
             self._check_available()
-
+            
+            # 根据引擎检查识别依赖
+            logger.info("检查引擎：%s (glm-asr=%s)", engine, engine == "glm-asr")
+            if engine == "glm-asr":
+                if not _check_glm_asr():
+                    logger.warning("GLM ASR 不可用，降级到 Whisper")
+                    engine = "whisper"
+    
             # 限制时长
             duration = max(1, min(duration, 120))
-
-            logger.info("开始录音: max=%.1fs, auto_stop=%s, 采样率=%d",
-                        duration, auto_stop, self._sample_rate)
+    
+            logger.info("开始录音：max=%.1fs, auto_stop=%s, engine=%s, 采样率=%d",
+                        duration, auto_stop, engine, self._sample_rate)
 
             # 在线程池中使用 VAD 录音
             loop = asyncio.get_event_loop()
@@ -340,41 +433,49 @@ class VoiceInputTool(BaseTool):
                     data={"text": "", "language": "unknown", "duration": actual_duration},
                 )
 
-            logger.info("录音完成, 实际时长: %.1fs, 数据长度: %d, 范围: [%.4f, %.4f]",
+            logger.info("录音完成，实际时长：%.1fs, 数据长度：%d, 范围：[%.4f, %.4f]",
                         actual_duration, len(audio_data), audio_data.min(), audio_data.max())
 
-            # 加载模型
-            model_obj = await loop.run_in_executor(None, self._load_model, model)
-
-            # 直接将 numpy 数组传给 Whisper（无需 ffmpeg）
-            transcribe_kwargs = {"fp16": False}
-            if language:
-                transcribe_kwargs["language"] = language
-
-            result = await loop.run_in_executor(
-                None, lambda: model_obj.transcribe(audio_data, **transcribe_kwargs)
-            )
-
-            text = result["text"].strip()
-            detected_language = result.get("language", "unknown")
-
-            # 转换为简体中文
-            text = to_simplified_chinese(text)
-
-            logger.info("转录完成: 语言=%s, 文字=%s", detected_language, text[:50])
-
-            return ToolResult(
-                status=ToolResultStatus.SUCCESS,
-                output=f"录音转录成功 (时长: {actual_duration:.1f}s, 语言: {detected_language})",
-                data={
-                    "text": text,
-                    "language": detected_language,
-                    "duration": actual_duration,
-                    "model": model,
-                    "auto_stopped": auto_stop,
-                },
-            )
-
+            # 根据引擎选择转录方式
+            if engine == "glm-asr":
+                # 使用 GLM ASR 云端识别
+                return await self._transcribe_with_glm_asr(
+                    audio_data=audio_data,
+                    actual_duration=actual_duration,
+                    loop=loop,
+                )
+            else:
+                # 使用 Whisper 本地识别
+                model_obj = await loop.run_in_executor(None, self._load_model, model)
+                
+                # 直接将 numpy 数组传给 Whisper（无需 ffmpeg）
+                transcribe_kwargs = {"fp16": False}
+                if language:
+                    transcribe_kwargs["language"] = language
+                
+                result = await loop.run_in_executor(
+                    None, lambda: model_obj.transcribe(audio_data, **transcribe_kwargs)
+                )
+                
+                text = result["text"].strip()
+                detected_language = result.get("language", "unknown")
+                
+                # 转换为简体中文
+                text = to_simplified_chinese(text)
+                
+                logger.info("转录完成：语言=%s, 文字=%s", detected_language, text[:50])
+                
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    output=f"录音转录成功 (时长：{actual_duration:.1f}s, 语言：{detected_language})",
+                    data={
+                        "text": text,
+                        "language": detected_language,
+                        "duration": actual_duration,
+                        "model": model,
+                        "auto_stopped": auto_stop,
+                    },
+                )
         except Exception as e:
             logger.exception("录音转录失败")
             return ToolResult(status=ToolResultStatus.ERROR, error=f"录音转录失败: {e}")
@@ -557,10 +658,10 @@ class VoiceInputTool(BaseTool):
         """列出可用的音频输入设备"""
         try:
             self._check_available()
-
+    
             devices = _sd.query_devices()
             input_devices = []
-
+    
             for i, dev in enumerate(devices):
                 if dev["max_input_channels"] > 0:
                     input_devices.append(
@@ -571,14 +672,75 @@ class VoiceInputTool(BaseTool):
                             "sample_rate": dev["default_samplerate"],
                         }
                     )
-
+    
             default_device = _sd.query_devices(kind="input")
-
+    
             return ToolResult(
                 status=ToolResultStatus.SUCCESS,
                 output=f"找到 {len(input_devices)} 个音频输入设备",
                 data={"devices": input_devices, "default": default_device["name"]},
             )
-
+    
         except Exception as e:
-            return ToolResult(status=ToolResultStatus.ERROR, error=f"查询设备失败: {e}")
+            return ToolResult(status=ToolResultStatus.ERROR, error=f"查询设备失败：{e}")
+    
+    # ========== GLM ASR 云端识别支持 ==========
+    
+    async def _transcribe_with_glm_asr(
+        self,
+        audio_data,
+        actual_duration: float,
+        loop: asyncio.AbstractEventLoop,
+    ) -> ToolResult:
+        """使用 GLM ASR 云端引擎转录。"""
+        import tempfile
+            
+        try:
+            # 临时保存为 WAV 文件
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+                temp_path = Path(temp_wav.name)
+                
+            # 保存 WAV 文件
+            audio_int16 = (_np.clip(audio_data, -1.0, 1.0) * 32767).astype(_np.int16)
+            await loop.run_in_executor(
+                None,
+                lambda: _write_wav(str(temp_path), self._sample_rate, audio_int16)
+            )
+                
+            logger.info("临时 WAV 文件已保存：%s (%.1f KB)", temp_path, temp_path.stat().st_size / 1024)
+                
+            # 调用 GLM ASR API
+            client = _glm_asr_client()
+            result = await client.transcribe_async(
+                file_path=str(temp_path),
+                request_id=f"weclaw_{time.time()}",
+            )
+                
+            logger.info("GLM ASR 转录完成：text=%s", result.text[:50])
+                
+            # 清理临时文件
+            try:
+                temp_path.unlink()
+                logger.debug("已清理临时 WAV 文件")
+            except Exception as e:
+                logger.warning(f"清理临时文件失败：{e}")
+                
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output=f"录音转录成功 (GLM ASR, 时长：{actual_duration:.1f}s)",
+                data={
+                    "text": result.text,
+                    "language": "zh",
+                    "duration": actual_duration,
+                    "engine": "glm-asr-2512",
+                    "request_id": result.request_id,
+                },
+            )
+                
+        except Exception as e:
+            logger.exception("GLM ASR 转录失败")
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"GLM ASR 转录失败：{e}",
+                data={"engine": "glm-asr"},
+            )

@@ -153,3 +153,28 @@ WinClaw-main/
 WinClaw-main.zip
 winclaw_server.rar
 resources/embedding_models/
+
+# ------------------------------------------
+# Next.js 官网项目 (独立开发)
+# ------------------------------------------
+/weclaw_link_web/
+
+# ------------------------------------------
+# 大型模型权重文件 (不纳入版本控制)
+# ------------------------------------------
+*.bin
+*.safetensors
+*.pth
+*.pt
+*.onnx
+*.h5
+*.pickle
+*.pkl
+*.ckpt
+*.pb
+*.mlmodel
+*.coreml
+*.tflite
+resources/Qwen/
+resources/qwen_tts_models/
+resources/embedding_models/

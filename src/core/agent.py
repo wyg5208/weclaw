@@ -22,6 +22,8 @@ from src.core.event_bus import EventBus
 from src.core.events import (
     AgentResponseEvent,
     AgentThinkingEvent,
+    DeferredToolResultEvent,
+    DeferredToolStartedEvent,
     ErrorEvent,
     EventType,
     FileGeneratedEvent,
@@ -38,6 +40,7 @@ from src.core.prompts import (
     detect_intent_with_confidence,
     DEFAULT_SYSTEM_PROMPT,
     CORE_SYSTEM_PROMPT,
+    COMPANION_PROMPT_MODULE,
     IntentResult,
 )
 from src.core.tool_exposure import ToolExposureEngine
@@ -284,6 +287,11 @@ class Agent:
         # 请求序列化锁：防止多路并发请求（本地+远程PWA）同时修改 session 历史
         # asyncio.Lock 必须在事件循环已启动后才能创建，使用懒加载
         self._chat_lock: asyncio.Lock | None = None
+
+        # CFTA: 异步工具执行锁（独立于 chat_lock，不阻塞新的聊天请求）
+        self._deferred_lock: asyncio.Lock | None = None
+        # CFTA: 当前后台工具任务（新请求到达时可 cancel）
+        self._deferred_task: asyncio.Task | None = None
         
         # Phase 6: 意识系统集成（已禁用）
         # 保持 CONSCIOUSNESS_ENABLED = False，不加载意识系统
@@ -303,6 +311,13 @@ class Agent:
         if self._chat_lock is None:
             self._chat_lock = asyncio.Lock()
         return self._chat_lock
+
+    @property
+    def deferred_lock(self) -> asyncio.Lock:
+        """CFTA: 懒加载异步工具执行锁。"""
+        if self._deferred_lock is None:
+            self._deferred_lock = asyncio.Lock()
+        return self._deferred_lock
     
     # 【优化】懒加载重型组件的属性方法
     @property
@@ -540,6 +555,12 @@ class Agent:
             user_input=user_input,
             config=trace_config,
         )
+
+        # 【关键修复】清理未完成的 tool_calls（避免 API 报错）
+        # 当用户在工具执行期间发送新消息时，需要补全缺失的 tool 响应
+        cleaned = self.session_manager.cleanup_incomplete_tool_calls()
+        if cleaned > 0:
+            logger.warning("已补全 %d 条缺失的 tool 响应消息", cleaned)
 
         # 添加用户消息
         self.session_manager.add_message(role="user", content=user_input)
@@ -1573,3 +1594,380 @@ class Agent:
         trace_collector.flush()
 
         yield max_step_msg
+
+    # ------------------------------------------------------------------
+    # CFTA: Chat-First, Tools-Async — 语音模式快速聊天 + 异步工具
+    # ------------------------------------------------------------------
+
+    async def chat_stream_voice_fast(self, user_input: str) -> AsyncGenerator[str, None]:
+        """语音模式快速聊天流（无工具），最小化首 token 延迟。
+
+        差异点与标准 chat_stream：
+        - 不做工具暴露，不传 tools 给模型
+        - 使用轻量 system prompt（核心 + 陪伴模块）
+        - 仅做流式文本输出，不支持 tool_calls
+        - 单次模型调用，不进入 ReAct 循环
+
+        Args:
+            user_input: 用户的输入文本
+
+        Yields:
+            str: 模型生成的文本片段
+        """
+        await self.chat_lock.acquire()
+        try:
+            async for chunk in self._chat_stream_voice_fast_impl(user_input):
+                yield chunk
+        finally:
+            self.chat_lock.release()
+
+    async def _chat_stream_voice_fast_impl(
+        self, user_input: str
+    ) -> AsyncGenerator[str, None]:
+        """语音快速聊天内部实现（已持有 chat_lock）。"""
+        session = self.session_manager.current_session
+        session_id = session.id
+
+        # 【关键修复】清理未完成的 tool_calls
+        cleaned = self.session_manager.cleanup_incomplete_tool_calls()
+        if cleaned > 0:
+            logger.warning("[CFTA-fast] 已补全 %d 条缺失的 tool 响应消息", cleaned)
+
+        # 添加用户消息
+        self.session_manager.add_message(role="user", content=user_input)
+
+        # 轻量系统提示词（不含工具指南）
+        lightweight_prompt = CORE_SYSTEM_PROMPT + "\n\n" + COMPANION_PROMPT_MODULE
+        self.session_manager.update_system_prompt(lightweight_prompt)
+
+        # 选择模型（无需 function calling）
+        model_cfg = self.model_selector.select_for_task(
+            needs_function_calling=False,
+            model_key=self.model_key,
+        )
+
+        messages = self.session_manager.get_messages(
+            max_tokens=model_cfg.context_window,
+        )
+
+        logger.info(
+            "[CFTA] 快速聊天模式: model=%s, messages=%d, tools=None",
+            model_cfg.key, len(messages),
+        )
+
+        # 发布模型调用事件
+        await self.event_bus.emit(EventType.MODEL_CALL, ModelCallEvent(
+            model_key=model_cfg.key,
+            model_id=model_cfg.id,
+            message_count=len(messages),
+            has_tools=False,
+            session_id=session_id,
+        ))
+
+        collected_content = ""
+        last_usage = None
+
+        chunk_timeout = STREAM_CHUNK_TIMEOUT
+        if model_cfg.provider == "ollama":
+            chunk_timeout = 300
+
+        try:
+            stream = self.model_registry.chat_stream(
+                model_key=model_cfg.key,
+                messages=messages,
+                tools=None,  # 关键: 不传工具，减少 prompt token
+            )
+
+            async for chunk in _stream_with_timeout(stream, chunk_timeout):
+                choice = chunk.choices[0] if chunk.choices else None
+                if choice is None:
+                    usage = getattr(chunk, "usage", None)
+                    if usage:
+                        last_usage = usage
+                    continue
+
+                delta = choice.delta
+                delta_content = getattr(delta, "content", None) or ""
+                if delta_content:
+                    collected_content += delta_content
+                    yield delta_content
+
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    last_usage = usage
+
+        except asyncio.TimeoutError:
+            logger.error("[CFTA] 快速聊天流式响应超时")
+            yield "\n抱歉，响应超时，请稍后重试。"
+            return
+        except Exception as e:
+            logger.error("[CFTA] 快速聊天模型调用失败: %s", e)
+            yield f"\n抱歉，聊天失败: {e}"
+            return
+
+        # 记录 token 用量
+        if last_usage:
+            tokens = getattr(last_usage, "total_tokens", 0)
+            self.session_manager.update_tokens(tokens)
+            self.model_registry.record_stream_usage(model_cfg.key, last_usage)
+
+            usage_record = UsageRecord(
+                model_key=model_cfg.key,
+                prompt_tokens=getattr(last_usage, "prompt_tokens", 0),
+                completion_tokens=getattr(last_usage, "completion_tokens", 0),
+                total_tokens=tokens,
+                cost=(
+                    getattr(last_usage, "prompt_tokens", 0) * model_cfg.cost_input
+                    + getattr(last_usage, "completion_tokens", 0) * model_cfg.cost_output
+                ) / 1_000_000,
+            )
+            self.cost_tracker.record(usage_record, session_id=session_id)
+
+            await self.event_bus.emit(EventType.MODEL_USAGE, ModelUsageEvent(
+                model_key=model_cfg.key,
+                prompt_tokens=usage_record.prompt_tokens,
+                completion_tokens=usage_record.completion_tokens,
+                total_tokens=tokens,
+                cost=usage_record.cost,
+                session_id=session_id,
+            ))
+
+        # 发布模型响应事件
+        await self.event_bus.emit(EventType.MODEL_RESPONSE, ModelResponseEvent(
+            model_key=model_cfg.key,
+            has_tool_calls=False,
+            content_preview=collected_content[:100],
+            session_id=session_id,
+        ))
+
+        # 写入 session 历史
+        self.session_manager.add_assistant_message(collected_content)
+
+        await self.event_bus.emit(EventType.AGENT_RESPONSE, AgentResponseEvent(
+            content=collected_content,
+            total_steps=1,
+            total_tokens=getattr(last_usage, "total_tokens", 0) if last_usage else 0,
+            tool_calls_count=0,
+            session_id=session_id,
+        ))
+
+        logger.info("[CFTA] 快速聊天完成，共 %d 字符", len(collected_content))
+
+    async def process_deferred_tools(
+        self, user_input: str, fast_reply: str, session_id: str,
+    ) -> str | None:
+        """CFTA Phase 2: 后台异步执行工具检测与调用。
+
+        在 Phase 1 快速聊天完成后调用。带完整的 tool schema
+        重新调用模型，如果模型认为需要工具则执行，否则静默退出。
+
+        此方法使用 deferred_lock 而非 chat_lock，
+        因此不会阻塞新的聊天请求。
+
+        Args:
+            user_input: 原始用户输入
+            fast_reply: Phase 1 的快速回复内容
+            session_id: 会话 ID
+
+        Returns:
+            工具执行结果摘要文本，或 None（无需工具）
+        """
+        async with self.deferred_lock:
+            # 发布异步工具开始事件
+            await self.event_bus.emit(
+                EventType.DEFERRED_TOOL_STARTED,
+                DeferredToolStartedEvent(
+                    user_input=user_input,
+                    session_id=session_id,
+                ),
+            )
+
+            # 意图识别 + 工具暴露
+            intent_result = detect_intent_with_confidence(user_input)
+            self.tool_exposure.reset()
+            tools = self.tool_exposure.get_schemas(intent_result)
+
+            if not tools:
+                logger.info("[CFTA-deferred] 无可用工具，静默退出")
+                return None
+
+            logger.info(
+                "[CFTA-deferred] 异步工具检测: intents=%s, schemas=%d",
+                intent_result.intents, len(tools),
+            )
+
+            # 选择模型（需要 function calling）
+            model_cfg = self.model_selector.select_for_task(
+                needs_function_calling=True,
+                model_key=self.model_key,
+            )
+
+            # 动态构建 System Prompt（带工具指南）
+            dynamic_system_prompt = build_system_prompt_from_intent(intent_result)
+
+            # 构建特殊的 messages：包含快速回复上下文 + 工具检测指令
+            deferred_system_msg = (
+                dynamic_system_prompt
+                + "\n\n[异步工具模式] 你已经对用户做了快速回复，"
+                "\n现在请判断用户的请求是否需要调用工具来完成。"
+                "\n如果需要工具，请直接调用；如果不需要，请回复 '[CFTA_NO_TOOL]'。"
+            )
+
+            # 构建专用的消息列表（不污染主 session）
+            deferred_messages = [
+                {"role": "system", "content": deferred_system_msg},
+                {"role": "user", "content": user_input},
+                {"role": "assistant", "content": fast_reply},
+                {
+                    "role": "user",
+                    "content": (
+                        "请检查上面的对话，判断是否需要调用工具来完成用户的请求。"
+                        "如果需要，请直接调用工具；如果不需要，请回复 '[CFTA_NO_TOOL]'。"
+                    ),
+                },
+            ]
+
+            # 调用模型（带工具，非流式）
+            try:
+                model_response = await asyncio.wait_for(
+                    self.model_registry.chat(
+                        model_key=model_cfg.key,
+                        messages=deferred_messages,
+                        tools=tools,
+                    ),
+                    timeout=self.inference_timeout,
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                logger.warning("[CFTA-deferred] 模型调用超时或被取消")
+                return None
+            except Exception as e:
+                logger.error("[CFTA-deferred] 模型调用失败: %s", e)
+                return None
+
+            # 解析响应
+            choice = model_response.choices[0]
+            message = choice.message
+            tool_calls = getattr(message, "tool_calls", None)
+            content = getattr(message, "content", "") or ""
+
+            # 记录 token 用量
+            usage = getattr(model_response, "usage", None)
+            if usage:
+                tokens = getattr(usage, "total_tokens", 0)
+                self.session_manager.update_tokens(tokens)
+                usage_record = UsageRecord(
+                    model_key=model_cfg.key,
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0),
+                    completion_tokens=getattr(usage, "completion_tokens", 0),
+                    total_tokens=tokens,
+                    cost=(
+                        getattr(usage, "prompt_tokens", 0) * model_cfg.cost_input
+                        + getattr(usage, "completion_tokens", 0) * model_cfg.cost_output
+                    ) / 1_000_000,
+                )
+                self.cost_tracker.record(usage_record, session_id=session_id)
+
+            if not tool_calls:
+                # 模型认为不需要工具
+                logger.info("[CFTA-deferred] 模型未返回工具调用，静默退出")
+                return None
+
+            # --- 有工具调用，执行工具 ---
+            logger.info(
+                "[CFTA-deferred] 检测到 %d 个工具调用，开始后台执行",
+                len(tool_calls),
+            )
+
+            executed_tools: list[str] = []
+            result_parts: list[str] = []
+
+            for tc in tool_calls:
+                func_name = tc.function.name
+                try:
+                    arguments = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    arguments = {}
+
+                resolved = self.tool_registry.resolve_function_name(func_name)
+                tool_name = resolved[0] if resolved else func_name
+                action_name = resolved[1] if resolved else ""
+
+                # 发布工具调用事件
+                await self.event_bus.emit(EventType.TOOL_CALL, ToolCallEvent(
+                    tool_name=tool_name,
+                    action_name=action_name,
+                    arguments=arguments,
+                    function_name=func_name,
+                    session_id=session_id,
+                ))
+
+                # 执行工具
+                result = await self.tool_registry.call_function(func_name, arguments)
+
+                # 发布工具结果事件
+                await self.event_bus.emit(EventType.TOOL_RESULT, ToolResultEvent(
+                    tool_name=tool_name,
+                    action_name=action_name,
+                    status=result.status.value,
+                    output=result.output[:500] if result.output else "",
+                    error=result.error,
+                    duration_ms=result.duration_ms,
+                    session_id=session_id,
+                ))
+
+                logger.info(
+                    "[CFTA-deferred]   %s.%s → %s (%.0fms)",
+                    tool_name, action_name,
+                    result.status.value, result.duration_ms,
+                )
+
+                executed_tools.append(f"{tool_name}.{action_name}")
+                if result.is_success:
+                    result_parts.append(
+                        f"{tool_name}.{action_name}: {result.output[:200]}"
+                    )
+                else:
+                    result_parts.append(
+                        f"{tool_name}.{action_name}: 失败 - {result.error}"
+                    )
+
+                # 检测文件生成
+                await self._check_and_emit_file_generated(
+                    tool_name, action_name, result, session_id,
+                )
+
+            # 构建结果摘要
+            summary = "\n".join(result_parts)
+
+            # 将工具执行结果追加到 session 历史
+            # 使用 chat_lock 保护 session 写入
+            async with self.chat_lock:
+                self.session_manager.add_message(
+                    role="assistant",
+                    content=f"[后台任务完成] {summary}",
+                )
+
+            # 发布异步工具结果事件
+            await self.event_bus.emit(
+                EventType.DEFERRED_TOOL_RESULT,
+                DeferredToolResultEvent(
+                    result_summary=summary,
+                    tool_names=executed_tools,
+                    session_id=session_id,
+                ),
+            )
+
+            logger.info(
+                "[CFTA-deferred] 异步工具执行完成: %s", executed_tools,
+            )
+            return summary
+
+    def cancel_deferred_tools(self) -> None:
+        """CFTA: 取消正在进行的后台工具任务。
+
+        在新的用户输入到达时调用，避免过时的异步任务继续执行。
+        """
+        if self._deferred_task and not self._deferred_task.done():
+            self._deferred_task.cancel()
+            logger.info("[CFTA] 已取消后台工具任务")
+            self._deferred_task = None

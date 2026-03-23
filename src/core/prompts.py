@@ -145,6 +145,15 @@ CORE_SYSTEM_PROMPT = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面
    - 注意：需要安装 whisper 引擎才能使用完整功能
    - 示例：speech_to_text.transcribe_audio, speech_to_text.transcribe_file
 
+6. **document_scanner** - 高拍仪文档扫描
+   - 使用场景：高拍仪/扫描仪扫描的试卷、作业智能解析
+   - 特点：GLM-4.6V 视觉模型、SQLite 缓存防重复、批量处理
+   - 常用 actions：
+     - document_scanner.scan_file：单个文件解析
+     - document_scanner.scan_folder：批量文件夹扫描
+     - document_scanner.query_history：查询历史记录
+   - 缓存机制：首次解析约 30-60 秒，后续相同文件<1 秒直接返回
+
 【专业文档工具选择指南】
 当用户需要生成合同、简历等专业文档时：
 
@@ -175,7 +184,29 @@ CORE_SYSTEM_PROMPT = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面
    - 使用场景：搜索学术论文（OpenAlex）、获取论文详情、导出检索结果
    - 示例：literature_search.search_papers, literature_search.get_paper_details
 
-附件处理指引：
+【高拍仪扫描工具选择指南】
+当用户需要处理高拍仪/扫描仪扫描的文档、试卷、作业时：
+
+1. **document_scanner.scan_file** - 单个文件解析
+   - 使用场景：解析单张试卷/作业图片、获取详细解答
+   - 特点：GLM-4.6V 视觉模型、包含缓存机制
+   - 参数：file_path（文件路径）、subject（科目）、grade_level（年级）
+
+2. **document_scanner.scan_folder** - 批量文件夹扫描
+   - 使用场景：批量处理多张图片、增量更新
+   - 特点：自动跳过已处理文件、统计缓存命中率
+   - 参数：folder_path（文件夹路径）、force_reprocess（强制重处理）
+
+3. **document_scanner.query_history** - 查询历史记录
+   - 使用场景：查找之前的解析结果、查看统计信息
+   - 参数：status（状态过滤）、limit（数量限制）
+
+【选择决策树】
+- 是否需要解析试卷/作业图片？→ document_scanner
+- 是否是单张图片？→ scan_file
+- 是否是多张图片？→ scan_folder
+- 是否需要查找历史记录？→ query_history
+- 附件处理指引：
 当用户提供附件文件时，会在消息开头看到 [附件信息] 区块。根据文件类型和用户请求选择处理方式：
 - 图片文件 (.png/.jpg/.jpeg 等)：可使用 ocr.recognize_file 识别文字
 - 文本文件 (.txt/.md/.csv/.json 等)：可使用 file.read 读取内容
@@ -490,6 +521,8 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "日记", "记账", "健康", "服药", "体重", "血压",
         "收支", "支出", "收入", "心率",
         "档案", "家庭成员", "联系人", "生日", "成长记录",
+        "课程表", "课表", "上课安排", "学习计划",
+        "食谱", "菜单", "学校食谱", "家庭食谱", "今天吃什么", "营养食谱",
     ],
     "email_task": [
         "邮件", "发邮件", "收邮件", "邮箱", "inbox",
@@ -503,6 +536,12 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "截图内容", "截图", "screenshot",
         # 补充：语音转文字定向触发
         "语音转文字", "音频转录", "字幕生成", "转成文字", "转文字",
+        # 新增：高拍仪/扫描仪相关（增加常用词以提高命中率）
+        "高拍仪", "扫描仪", "扫描文档", "扫描图片",
+        "试卷解析", "作业批改", "题目识别",
+        "deli 扫描", "得力扫描", "批量扫描", "文档解析",
+        "扫一下", "扫这张", "扫试卷", "扫作业",
+        "扫描试卷", "扫描作业", "解析试卷", "解析作业",
     ],
     # ==================== 新增7个意图维度 ====================
     "document_processing": [
@@ -583,12 +622,14 @@ INTENT_TOOL_MAPPING: dict[str, list[str]] = {
     ],
     "knowledge": ["knowledge_rag", "batch_paper_analyzer", "file", "search", "chat_history", "python_runner", "literature_search"],
     "life_management": [
-        "diary", "finance", "health", "medication", "user_profile",
+        "diary", "finance", "health", "medication", "user_profile", "family_member", "course_schedule", "meal_menu",
     ],
     "email_task": ["email"],
     "multimedia": [
         "voice_input", "voice_output", "ocr", "speech_to_text",
+        "document_scanner",  # 高拍仪文档扫描
     ],
+    "communication": ["wechat"],
     # ==================== 新增7个意图的工具映射 ====================
     "document_processing": [
         "pdf_tool", "format_converter", "ppt_generator",
@@ -648,7 +689,7 @@ INTENT_PRIORITY_MAP: dict[str, dict[str, list[str]]] = {
         "alternative": ["file", "search", "chat_history", "python_runner"],
     },
     "life_management": {
-        "recommended": ["diary", "finance", "health", "medication", "user_profile"],
+        "recommended": ["diary", "finance", "health", "medication", "user_profile", "family_member", "course_schedule", "meal_menu"],
         "alternative": [],
     },
     "email_task": {
@@ -656,7 +697,7 @@ INTENT_PRIORITY_MAP: dict[str, dict[str, list[str]]] = {
         "alternative": ["file"],
     },
     "multimedia": {
-        "recommended": ["voice_input", "voice_output", "ocr", "speech_to_text"],
+        "recommended": ["voice_input", "voice_output", "ocr", "speech_to_text", "document_scanner"],
         "alternative": ["screen"],
     },
     # ==================== 新增7个意图的优先级配置 ====================
