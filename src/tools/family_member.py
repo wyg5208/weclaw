@@ -321,7 +321,7 @@ class FamilyMemberTool(BaseTool):
             ),
         ]
 
-    def execute(self, action: str, params: dict[str, Any]) -> ToolResult:
+    async def execute(self, action: str, params: dict[str, Any]) -> ToolResult:
         action_map = {
             "create_member": self._create_member,
             "query_members": self._query_members,
