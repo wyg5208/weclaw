@@ -356,14 +356,22 @@ class Agent:
         return self._trace_collector
 
     def reset(self) -> None:
-        """清空当前会话的对话历史。"""
-        # 如果已初始化则清空，未初始化则跳过
+        """新建会话，保留旧会话到历史记录。
+            
+        不再清空当前会话，而是创建新会话并切换到它。
+        旧会话的消息已在对话过程中保存到存储，历史记录不会丢失。
+        """
+        # 如果已初始化则创建新会话，未初始化则跳过
         if self._session_manager is not None:
-            self.session_manager.clear_messages()
-        
+            # 获取当前模型配置
+            current_model = self.model_key or ""
+            # 创建新会话（自动保存到存储，旧会话保留在历史中）
+            self.session_manager.create_session(title="新对话", model_key=current_model)
+            logger.info("已创建新会话，旧会话保留在历史记录中")
+    
         # 重置执行状态跟踪器
         self._execution_tracker.reset()
-        
+    
         # Phase 6: 重置意识评估器（已禁用，始终为 None）
         # 不再需要
     

@@ -970,8 +970,23 @@ class WinClawGuiApp:
 
         # 内部命令
         if message == "/new_session":
+            # 先取消正在进行的任务，避免残留消息
+            if self._current_chat_task and not self._current_chat_task.done():
+                self._current_chat_task.cancel()
+                logger.info("新建会话：取消正在进行的任务")
+            self._current_chat_task = None
+            
+            # 重置 UI 思考状态
+            if self._window:
+                self._window._set_thinking_state(False)
+                self._window.set_tool_status("")
+            
+            # 创建新会话（自动保存旧会话到历史）
             if self._agent:
                 self._agent.reset()
+            
+            # 刷新历史对话 TAB（让旧会话出现在历史列表中）
+            self._on_refresh_history_tab()
             return
         
         # 检查是否是关怀请求（不阻塞消息发送，两者并行执行）
