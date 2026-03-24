@@ -542,6 +542,10 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "deli 扫描", "得力扫描", "批量扫描", "文档解析",
         "扫一下", "扫这张", "扫试卷", "扫作业",
         "扫描试卷", "扫描作业", "解析试卷", "解析作业",
+        # 新增：歌曲库/音乐播放相关
+        "歌曲", "音乐", "播放", "听歌", "听音乐", "歌单", "播放列表",
+        "暂停", "切歌", "下一首", "上一首", "循环播放", "随机播放",
+        "轻音乐", "古典音乐", "纯音乐", "钢琴曲",
     ],
     # ==================== 新增7个意图维度 ====================
     "document_processing": [
@@ -638,6 +642,7 @@ INTENT_TOOL_MAPPING: dict[str, list[str]] = {
     "multimedia": [
         "voice_input", "voice_output", "ocr", "speech_to_text",
         "document_scanner",  # 高拍仪文档扫描
+        "music_player",  # 歌曲库
     ],
     "communication": ["wechat"],
     # ==================== 新增7个意图的工具映射 ====================
@@ -707,7 +712,7 @@ INTENT_PRIORITY_MAP: dict[str, dict[str, list[str]]] = {
         "alternative": ["file"],
     },
     "multimedia": {
-        "recommended": ["voice_input", "voice_output", "ocr", "speech_to_text", "document_scanner"],
+        "recommended": ["voice_input", "voice_output", "ocr", "speech_to_text", "document_scanner", "music_player"],
         "alternative": ["screen"],
     },
     # ==================== 新增7个意图的优先级配置 ====================

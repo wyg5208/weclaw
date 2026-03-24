@@ -95,6 +95,8 @@ def _extract_tool_name(func_name: str) -> str:
         "gif_maker", "ai_writer", "education_tool", "ppt_generator",
         "financial_report", "contract_generator", "family_member", "meal_menu",
         "document_scanner",  # 高拍仪文档扫描
+        "music_player",  # 歌曲库
+        "english_conversation",  # 英语口语练习
     ]
     for prefix in known_prefixes:
         if func_name.startswith(prefix + "_") or func_name == prefix:

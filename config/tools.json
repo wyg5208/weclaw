@@ -1070,6 +1070,33 @@
         "require_confirmation": false
       },
       "actions": ["start_conversation", "respond", "end_conversation", "list_topics"]
+    },
+    "music_player": {
+      "enabled": true,
+      "module": "src.tools.music_player",
+      "class": "MusicPlayerTool",
+      "display": {
+        "name": "歌曲库",
+        "emoji": "🎵",
+        "description": "歌曲库管理：播放音乐、管理标签、创建播放列表、扫描本地音乐",
+        "category": "multimedia"
+      },
+      "config": {
+        "library_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": [
+        "add_songs", "scan_local_music", "download_song", "delete_song", "update_song_info",
+        "play_song", "pause_song", "resume_song", "stop_song", "next_song", "prev_song",
+        "seek_to", "set_volume", "set_loop_mode", "shuffle_play",
+        "search_songs", "get_now_playing", "get_playlist",
+        "create_tag", "add_tag", "remove_tag",
+        "create_playlist", "add_to_playlist", "remove_from_playlist",
+        "get_player_settings", "set_player_settings"
+      ]
     }
   },
   "categories": {

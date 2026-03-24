@@ -160,6 +160,9 @@ class MainWindow(QMainWindow):
         # 附件管理器
         self._attachment_manager = AttachmentManager(self)
 
+        # 迷你播放器实例
+        self._music_player_panel = None
+
         # 初始化命令处理器
         self._init_command_handler()
 
@@ -945,6 +948,15 @@ class MainWindow(QMainWindow):
         self._continuous_btn.clicked.connect(self._on_continuous_toggle)
         toolbar.addWidget(self._continuous_btn)
 
+        toolbar.addSeparator()
+
+        # 歌曲库/迷你播放器按钮
+        self._music_btn = QPushButton(tr("🎵 歌曲库"))
+        self._music_btn.setToolTip(tr("打开迷你音乐播放器"))
+        self._music_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 70px; max-width: 80px;")
+        self._music_btn.clicked.connect(self._on_music_player_toggle)
+        toolbar.addWidget(self._music_btn)
+
         # 对话状态标签
         self._conversation_status_label = QLabel("")
         self._conversation_status_label.setStyleSheet("color: #888; font-size: 11px;")
@@ -1721,6 +1733,9 @@ class MainWindow(QMainWindow):
         """拦截关闭事件 → 最小化到托盘。"""
         # 停止远程桥接
         self._stop_remote_bridge()
+        
+        # 关闭迷你播放器
+        self._close_music_player()
         
         if self._minimize_to_tray and not self._force_quit:
             event.ignore()
@@ -3191,3 +3206,81 @@ class MainWindow(QMainWindow):
             ]
             # 刷新显示
             self._refresh_history_display()
+
+    # ==================== 迷你播放器 ====================
+
+    def _on_music_player_toggle(self) -> None:
+        """切换迷你播放器显示/隐藏。"""
+        if self._music_player_panel is None:
+            # 首次点击时创建播放器
+            self._create_music_player()
+        
+        if self._music_player_panel.isVisible():
+            self._music_player_panel.hide()
+        else:
+            self._music_player_panel.show()
+
+    def _create_music_player(self) -> None:
+        """创建迷你播放器实例。"""
+        try:
+            from src.ui.music_player_panel import MiniPlayerPanel
+            from src.tools.music_player import MusicPlayerTool
+            
+            # 创建音乐工具实例
+            music_tool = MusicPlayerTool()
+            
+            # 创建播放器面板
+            self._music_player_panel = MiniPlayerPanel(music_tool=music_tool)
+            
+            # 设置工具实例
+            self._music_player_panel.set_music_tool(music_tool)
+            
+            # 连接信号
+            self._music_player_panel.closed.connect(self._on_music_player_closed)
+            
+            # 移动到屏幕右下角
+            from PySide6.QtWidgets import QApplication
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                x = screen_geo.right() - self._music_player_panel.width() - 20
+                y = screen_geo.bottom() - self._music_player_panel.height() - 20
+                self._music_player_panel.move(x, y)
+            
+            self._music_player_panel.show()
+            logger.info("迷你播放器已创建并显示")
+            
+        except Exception as e:
+            logger.error(f"创建迷你播放器失败: {e}")
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "错误",
+                f"无法打开迷你播放器：{str(e)}",
+            )
+
+    def _close_music_player(self) -> None:
+        """关闭迷你播放器（停止播放并关闭窗口）。"""
+        if self._music_player_panel is not None:
+            try:
+                # 停止播放
+                self._music_player_panel._player.stop()
+                # 关闭窗口
+                self._music_player_panel.close()
+                self._music_player_panel.deleteLater()
+                logger.info("迷你播放器已关闭")
+            except Exception as e:
+                logger.error(f"关闭迷你播放器失败: {e}")
+            finally:
+                self._music_player_panel = None
+
+    def _on_music_player_closed(self) -> None:
+        """迷你播放器关闭时的回调。"""
+        logger.info("迷你播放器已关闭")
+        self._music_player_panel = None
+
+    def get_music_player_panel(self):
+        """获取迷你播放器面板实例（供其他模块调用）。"""
+        if self._music_player_panel is None:
+            self._create_music_player()
+        return self._music_player_panel

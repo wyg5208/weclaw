@@ -243,6 +243,8 @@ class ToolRegistry:
             kwargs["db_path"] = tool_config.get("db_path", "")
         elif tool_name == "course_schedule":
             kwargs["schedules_dir"] = tool_config.get("schedules_dir", "")
+        elif tool_name == "music_player":
+            kwargs["library_dir"] = tool_config.get("library_dir", "")
                 
         return kwargs
 
