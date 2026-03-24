@@ -307,17 +307,22 @@ class VoiceInputTool(BaseTool):
         auto_stop: bool = True,
         silence_threshold: float = VAD_SILENCE_THRESHOLD,
         silence_duration: float = VAD_SILENCE_DURATION,
+        on_speech_segment: Optional[callable] = None,
     ) -> tuple:
         """使用 VAD（语音活动检测）录音。
 
         在后台线程中同步执行。持续录音直到检测到说完（静音超过阈值），
         或达到最大时长，或外部调用 stop_recording()。
 
+        支持实时识别回调：当检测到一个完整语句后，调用 on_speech_segment 回调。
+
         Args:
             max_duration: 最大录音时长(秒)
             auto_stop: 是否启用VAD自动停止
             silence_threshold: 静音能量阈值
             silence_duration: 静音持续多少秒停止
+            on_speech_segment: 语句段回调函数，接收 (audio_data, duration) 参数
+                                用于实时识别并显示到UI
 
         Returns:
             (audio_data: numpy float32 array, actual_duration: float)
@@ -337,6 +342,12 @@ class VoiceInputTool(BaseTool):
             "开始VAD录音: max=%.1fs, auto_stop=%s, threshold=%.4f, silence=%.1fs",
             max_duration, auto_stop, silence_threshold, silence_duration,
         )
+
+        # 语句段缓冲区（用于实时识别回调）
+        segment_chunks = []
+        segment_samples = 0
+        segment_silence_count = 0
+        in_speech = False
 
         # 打开音频流
         stream = _sd.InputStream(
@@ -358,9 +369,37 @@ class VoiceInputTool(BaseTool):
 
                 if energy > silence_threshold:
                     silence_count = 0
+                    segment_silence_count = 0
                     has_speech = True
+                    in_speech = True
+                    # 添加到当前语句段缓冲区
+                    segment_chunks.append(chunk.copy())
+                    segment_samples += len(chunk)
                 else:
                     silence_count += 1
+                    if in_speech:
+                        segment_silence_count += 1
+                        # 继续收集静音段到当前语句（保持连续性）
+                        segment_chunks.append(chunk.copy())
+                        segment_samples += len(chunk)
+
+                # 检测到一个完整语句段（有语音后，静音超过阈值）
+                # 回调识别并重置语句段缓冲区
+                if in_speech and segment_silence_count >= silence_samples_needed:
+                    if segment_samples >= min_samples and on_speech_segment:
+                        # 提取语句段音频
+                        segment_audio = _np.concatenate(segment_chunks, axis=0).flatten().astype(_np.float32)
+                        segment_duration = len(segment_audio) / self._sample_rate
+                        logger.info("检测到语句段: 时长=%.1fs, 调用实时识别回调", segment_duration)
+                        try:
+                            on_speech_segment(segment_audio, segment_duration)
+                        except Exception as e:
+                            logger.warning("实时识别回调失败: %s", e)
+                    # 重置语句段缓冲区
+                    segment_chunks = []
+                    segment_samples = 0
+                    segment_silence_count = 0
+                    in_speech = False
 
                 # VAD 自动停止：已经有语音输入，且连续静音超过阈值
                 if auto_stop and has_speech and total_samples >= min_samples:
@@ -370,6 +409,16 @@ class VoiceInputTool(BaseTool):
         finally:
             stream.stop()
             stream.close()
+
+            # 处理剩余的语句段（录音结束时还有未识别的内容）
+            if in_speech and segment_samples >= min_samples and on_speech_segment:
+                segment_audio = _np.concatenate(segment_chunks, axis=0).flatten().astype(_np.float32)
+                segment_duration = len(segment_audio) / self._sample_rate
+                logger.info("录音结束，处理剩余语句段: 时长=%.1fs", segment_duration)
+                try:
+                    on_speech_segment(segment_audio, segment_duration)
+                except Exception as e:
+                    logger.warning("处理剩余语句段失败: %s", e)
 
         if not all_chunks:
             return _np.array([], dtype=_np.float32), 0.0
@@ -381,7 +430,8 @@ class VoiceInputTool(BaseTool):
 
     async def _record_and_transcribe(
         self, duration: float = 30.0, auto_stop: bool = True,
-        engine: Optional[str] = None, model: str = "base", language: Optional[str] = None
+        engine: Optional[str] = None, model: str = "base", language: Optional[str] = None,
+        on_speech_segment: Optional[callable] = None,
     ) -> ToolResult:
         """录制音频并转文字（支持 VAD 自动停止）。
     
@@ -391,6 +441,8 @@ class VoiceInputTool(BaseTool):
             engine: 识别引擎 whisper/glm-asr，默认 glm-asr（云端）
             model: Whisper 模型 (仅 whisper 引擎)
             language: 语言代码
+            on_speech_segment: 实时语句段回调，接收 (text, is_final) 参数
+                                text 为识别结果，is_final 表示是否为最终结果
         """
         # 如果未指定引擎，使用实例默认值（可通过环境变量配置）
         if engine is None:
@@ -412,9 +464,48 @@ class VoiceInputTool(BaseTool):
     
             # 限制时长
             duration = max(1, min(duration, 120))
-    
+
             logger.info("开始录音：max=%.1fs, auto_stop=%s, engine=%s, 采样率=%d",
                         duration, auto_stop, engine, self._sample_rate)
+
+            # 创建实时转录回调包装器
+            def segment_callback_wrapper(audio_segment, segment_duration):
+                """语句段回调包装器：转录音频段并调用用户回调。"""
+                if on_speech_segment is None:
+                    return
+                try:
+                    if engine == "glm-asr":
+                        # GLM ASR 需要异步，在新事件循环中运行
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                            temp_path = Path(tmp.name)
+                        audio_int16 = (_np.clip(audio_segment, -1.0, 1.0) * 32767).astype(_np.int16)
+                        _write_wav(str(temp_path), self._sample_rate, audio_int16)
+                        client = _glm_asr_client()
+                        # 在新事件循环中运行异步方法
+                        result = asyncio.run(client.transcribe_async(
+                            file_path=str(temp_path),
+                            request_id=f"weclaw_seg_{time.time()}"
+                        ))
+                        text = result.text
+                        try:
+                            temp_path.unlink()
+                        except:
+                            pass
+                    else:
+                        # Whisper 同步转录
+                        model_obj = self._load_model(model)
+                        transcribe_kwargs = {"fp16": False}
+                        if language:
+                            transcribe_kwargs["language"] = language
+                        result = model_obj.transcribe(audio_segment, **transcribe_kwargs)
+                        text = to_simplified_chinese(result["text"].strip())
+
+                    if text.strip():
+                        logger.info("实时转录结果: %s", text[:50])
+                        on_speech_segment(text, False)  # is_final=False 表示还有后续
+                except Exception as e:
+                    logger.warning("实时转录失败: %s", e)
 
             # 在线程池中使用 VAD 录音
             loop = asyncio.get_event_loop()
@@ -423,6 +514,7 @@ class VoiceInputTool(BaseTool):
                 lambda: self._record_with_vad(
                     max_duration=duration,
                     auto_stop=auto_stop,
+                    on_speech_segment=segment_callback_wrapper if on_speech_segment else None,
                 )
             )
 

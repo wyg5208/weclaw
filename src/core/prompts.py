@@ -582,8 +582,11 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "闪卡", "flashcard", "记忆卡",
         "学习计划", "复习计划", "学习安排",
         "概念解释", "解释概念", "什么是",
-        # 补充变体：支持 "出10道数学选择题" 等表达
+        # 补充变体：支持 "出 10 道数学选择题" 等表达
         "选择题", "填空题", "问答题", "数学题", "道题",
+        # 英语口语练习
+        "英语口语", "英语对话", "练口语", "practice English",
+        "spoken English", "英语练习", "学英语",
     ],
     "research": [
         "文献检索", "搜论文", "查论文", "学术搜索",
@@ -647,7 +650,7 @@ INTENT_TOOL_MAPPING: dict[str, list[str]] = {
         "coding_assistant", "python_runner",
     ],
     "education": [
-        "education_tool",
+        "education_tool", "english_conversation",
     ],
     "research": [
         "literature_search",

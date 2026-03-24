@@ -116,14 +116,152 @@ class VoiceWaveWidget(QWidget):
         painter.end()
 
 
-class VoiceRecordDialog(QDialog):
-    """录音可视化弹窗。
+class VoiceRecordState:
+    """录音状态管理器（轻量级，不使用独立对话框）。
 
-    在录音过程中弹出，提供清晰的视觉反馈：
-    - 大图标 + 状态文字
-    - 波形动画
-    - 倒计时进度条
-    - 停止按钮
+    通过信号通知主窗口更新录音状态UI，而不是弹出独立对话框。
+    避免遮挡主界面的对话区域。
+    """
+
+    # 信号
+    stop_requested = Signal()          # 用户请求停止录音
+    cancelled = Signal()               # 用户取消
+    state_changed = Signal(object, str, float)  # (状态, 状态文本, 已录时长)
+
+    def __init__(
+        self,
+        duration: float = 30.0,
+        parent: Optional[QWidget] = None,
+        *,
+        vad_mode: bool = True,
+    ):
+        """初始化录音状态管理器。
+
+        Args:
+            duration: 录音时长(秒), VAD模式下为最大上限
+            parent: 父窗口（用于QObject父级关系）
+            vad_mode: 是否为VAD模式（说完自动停止）
+        """
+        # 注意：这个类不是QWidget，但需要Signal功能
+        # 实际使用时会作为QObject的成员
+        self._duration = duration
+        self._elapsed = 0.0
+        self._state = RecordState.PREPARING
+        self._result_text = ""
+        self._vad_mode = vad_mode
+        self._countdown_timer: Optional[QTimer] = None
+        self._parent = parent
+
+    def _emit_state(self, status_text: str) -> None:
+        """发送状态更新信号。"""
+        try:
+            self.state_changed.emit(self._state, status_text, self._elapsed)
+        except RuntimeError:
+            pass  # 信号可能未连接
+
+    # ====== 状态切换 ======
+
+    def start_recording(self) -> None:
+        """切换到录音中状态。"""
+        self._state = RecordState.RECORDING
+        self._elapsed = 0.0
+
+        # 启动计时器
+        if self._parent:
+            self._countdown_timer = QTimer(self._parent)
+            self._countdown_timer.setInterval(100)  # 100ms 更新一次
+            self._countdown_timer.timeout.connect(self._on_countdown_tick)
+            self._countdown_timer.start()
+
+        self._emit_state(f"🔴 0.0s")
+
+    def set_processing(self) -> None:
+        """切换到识别处理中状态。"""
+        self._state = RecordState.PROCESSING
+
+        if self._countdown_timer:
+            self._countdown_timer.stop()
+            self._countdown_timer = None
+
+        self._emit_state("⏳ 识别中...")
+
+    def set_success(self, text: str) -> None:
+        """切换到识别成功状态。
+
+        Args:
+            text: 识别出的文字
+        """
+        self._state = RecordState.SUCCESS
+        self._result_text = text
+        self._emit_state("✅ 完成")
+
+    def set_error(self, error_msg: str) -> None:
+        """切换到错误状态。
+
+        Args:
+            error_msg: 错误信息
+        """
+        self._state = RecordState.ERROR
+
+        if self._countdown_timer:
+            self._countdown_timer.stop()
+            self._countdown_timer = None
+
+        self._emit_state("❌ 失败")
+
+    def set_no_speech(self) -> None:
+        """未检测到语音。"""
+        self._state = RecordState.ERROR
+
+        if self._countdown_timer:
+            self._countdown_timer.stop()
+            self._countdown_timer = None
+
+        self._emit_state("🔇 无语音")
+
+    def cancel(self) -> None:
+        """取消录音。"""
+        if self._countdown_timer:
+            self._countdown_timer.stop()
+            self._countdown_timer = None
+        self._state = RecordState.CANCELLED
+        self.cancelled.emit()
+
+    def get_elapsed(self) -> float:
+        """获取已录音时长。"""
+        return self._elapsed
+
+    def get_state(self) -> RecordState:
+        """获取当前状态。"""
+        return self._state
+
+    # ====== 内部方法 ======
+
+    def _on_countdown_tick(self) -> None:
+        """计时更新。"""
+        self._elapsed += 0.1
+
+        # 发送状态更新
+        self._emit_state(f"🔴 {self._elapsed:.1f}s")
+
+        # 达到最大时长自动停止计时器
+        if self._elapsed >= self._duration:
+            if self._countdown_timer:
+                self._countdown_timer.stop()
+                self._countdown_timer = None
+
+    def request_stop(self) -> None:
+        """请求停止录音。"""
+        self.stop_requested.emit()
+
+
+# ====== 保留原有对话框类作为可选方案（标记为Legacy） ======
+
+class VoiceRecordDialog(QDialog):
+    """录音可视化弹窗（传统版本，已被VoiceRecordState替代）。
+
+    保留此类以备需要独立对话框的场景。
+    默认情况下，新代码应使用VoiceRecordState配合主窗口内联UI。
     """
 
     # 信号
@@ -158,7 +296,7 @@ class VoiceRecordDialog(QDialog):
     def _setup_ui(self) -> None:
         """初始化界面。"""
         self.setWindowTitle("语音录入")
-        self.setFixedSize(380, 320)
+        self.setFixedSize(280, 200)  # 缩小尺寸
         self.setModal(False)  # 非模态，不阻塞主窗口
         self.setWindowFlags(
             Qt.WindowType.Dialog
@@ -168,14 +306,14 @@ class VoiceRecordDialog(QDialog):
         )
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(8)
+        layout.setContentsMargins(16, 12, 16, 12)
 
         # === 状态图标 ===
         self._icon_label = QLabel()
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_font = QFont()
-        icon_font.setPointSize(48)
+        icon_font.setPointSize(32)
         self._icon_label.setFont(icon_font)
         self._icon_label.setText("🎤")
         layout.addWidget(self._icon_label)
@@ -184,7 +322,7 @@ class VoiceRecordDialog(QDialog):
         self._status_label = QLabel("准备录音...")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_font = QFont()
-        status_font.setPointSize(14)
+        status_font.setPointSize(11)
         status_font.setBold(True)
         self._status_label.setFont(status_font)
         layout.addWidget(self._status_label)
@@ -192,58 +330,31 @@ class VoiceRecordDialog(QDialog):
         # === 提示文字 ===
         self._hint_label = QLabel("即将开始，请准备说话")
         self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint_label.setStyleSheet("color: #888; font-size: 12px;")
+        self._hint_label.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self._hint_label)
-
-        # === 波形动画 ===
-        self._wave_widget = VoiceWaveWidget()
-        layout.addWidget(self._wave_widget)
-
-        # === 进度条 (倒计时) ===
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setMinimum(0)
-        self._progress_bar.setMaximum(int(self._duration * 10))  # 0.1秒精度
-        self._progress_bar.setValue(0)
-        self._progress_bar.setTextVisible(True)
-        self._progress_bar.setFormat(f"0.0 / {self._duration:.0f} 秒")
-        self._progress_bar.setStyleSheet(
-            "QProgressBar {"
-            "  border: 1px solid #ddd;"
-            "  border-radius: 6px;"
-            "  text-align: center;"
-            "  height: 22px;"
-            "  background: #f0f0f0;"
-            "}"
-            "QProgressBar::chunk {"
-            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            "    stop:0 #ff6b6b, stop:1 #ee5a24);"
-            "  border-radius: 5px;"
-            "}"
-        )
-        layout.addWidget(self._progress_bar)
 
         # === 结果文字区域 ===
         self._result_label = QLabel("")
         self._result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._result_label.setWordWrap(True)
-        self._result_label.setStyleSheet("color: #333; font-size: 13px;")
+        self._result_label.setStyleSheet("color: #333; font-size: 11px;")
         self._result_label.setVisible(False)
-        self._result_label.setMaximumHeight(60)
+        self._result_label.setMaximumHeight(40)
         layout.addWidget(self._result_label)
 
         # === 按钮栏 ===
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(12)
+        btn_layout.setSpacing(8)
 
-        self._stop_btn = QPushButton("⏹ 停止录音")
+        self._stop_btn = QPushButton("⏹ 停止")
         self._stop_btn.setStyleSheet(
             "QPushButton {"
             "  background-color: #ff4444;"
             "  color: white;"
             "  border: none;"
-            "  border-radius: 6px;"
-            "  padding: 8px 24px;"
-            "  font-size: 13px;"
+            "  border-radius: 4px;"
+            "  padding: 6px 16px;"
+            "  font-size: 12px;"
             "  font-weight: bold;"
             "}"
             "QPushButton:hover {"
@@ -258,9 +369,9 @@ class VoiceRecordDialog(QDialog):
             "QPushButton {"
             "  background-color: #f0f0f0;"
             "  border: 1px solid #ddd;"
-            "  border-radius: 6px;"
-            "  padding: 8px 24px;"
-            "  font-size: 13px;"
+            "  border-radius: 4px;"
+            "  padding: 6px 16px;"
+            "  font-size: 12px;"
             "}"
             "QPushButton:hover {"
             "  background-color: #e0e0e0;"
@@ -280,26 +391,21 @@ class VoiceRecordDialog(QDialog):
 
         self._icon_label.setText("🔴")
         self._status_label.setText("录音中...")
-        self._status_label.setStyleSheet("color: #ff4444; font-size: 14px; font-weight: bold;")
+        self._status_label.setStyleSheet("color: #ff4444; font-size: 11px; font-weight: bold;")
 
         if self._vad_mode:
-            # VAD 模式：显示"说完自动停止"提示，无倒计时
             self._hint_label.setText("请说话，说完后自动停止")
-            self._hint_label.setStyleSheet("color: #ff6b6b; font-size: 13px; font-weight: bold;")
-            self._progress_bar.setVisible(False)
+            self._hint_label.setStyleSheet("color: #ff6b6b; font-size: 11px;")
         else:
-            # 定时模式：显示倒计时
             self._hint_label.setText("请开始说话")
-            self._hint_label.setStyleSheet("color: #ff6b6b; font-size: 13px; font-weight: bold;")
-            self._progress_bar.setVisible(True)
+            self._hint_label.setStyleSheet("color: #ff6b6b; font-size: 11px;")
 
-        self._wave_widget.start()
         self._stop_btn.setEnabled(True)
         self._result_label.setVisible(False)
 
-        # 启动计时器（VAD模式显示已录时长，定时模式显示倒计时）
+        # 启动计时器
         self._countdown_timer = QTimer(self)
-        self._countdown_timer.setInterval(100)  # 100ms 更新一次
+        self._countdown_timer.setInterval(100)
         self._countdown_timer.timeout.connect(self._on_countdown_tick)
         self._countdown_timer.start()
 
@@ -314,15 +420,12 @@ class VoiceRecordDialog(QDialog):
         if self._countdown_timer:
             self._countdown_timer.stop()
 
-        self._wave_widget.stop()
         self._icon_label.setText("⏳")
         self._status_label.setText("识别中...")
-        self._status_label.setStyleSheet("color: #f39c12; font-size: 14px; font-weight: bold;")
-        self._hint_label.setText("正在将语音转为文字，请稍候...")
-        self._hint_label.setStyleSheet("color: #888; font-size: 12px;")
+        self._status_label.setStyleSheet("color: #f39c12; font-size: 11px; font-weight: bold;")
+        self._hint_label.setText("正在将语音转为文字...")
+        self._hint_label.setStyleSheet("color: #888; font-size: 11px;")
 
-        self._progress_bar.setMaximum(0)  # 不确定进度（动画）
-        self._progress_bar.setFormat("处理中...")
         self._stop_btn.setEnabled(False)
         self._stop_btn.setText("处理中...")
 
@@ -337,18 +440,17 @@ class VoiceRecordDialog(QDialog):
 
         self._icon_label.setText("✅")
         self._status_label.setText("识别完成")
-        self._status_label.setStyleSheet("color: #27ae60; font-size: 14px; font-weight: bold;")
+        self._status_label.setStyleSheet("color: #27ae60; font-size: 11px; font-weight: bold;")
 
-        display_text = text if len(text) <= 60 else text[:57] + "..."
+        display_text = text if len(text) <= 40 else text[:37] + "..."
         self._hint_label.setText("\u201c" + display_text + "\u201d")
-        self._hint_label.setStyleSheet("color: #333; font-size: 13px;")
+        self._hint_label.setStyleSheet("color: #333; font-size: 11px;")
 
-        self._progress_bar.setVisible(False)
         self._stop_btn.setVisible(False)
         self._cancel_btn.setText("关闭")
 
-        # 2秒后自动关闭
-        QTimer.singleShot(2000, self._auto_close)
+        # 1.5秒后自动关闭
+        QTimer.singleShot(1500, self._auto_close)
 
     def set_error(self, error_msg: str) -> None:
         """切换到错误状态。
@@ -360,20 +462,18 @@ class VoiceRecordDialog(QDialog):
 
         if self._countdown_timer:
             self._countdown_timer.stop()
-        self._wave_widget.stop()
 
         self._icon_label.setText("❌")
         self._status_label.setText("识别失败")
-        self._status_label.setStyleSheet("color: #e74c3c; font-size: 14px; font-weight: bold;")
-        self._hint_label.setText(error_msg)
-        self._hint_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
+        self._status_label.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: bold;")
+        self._hint_label.setText(error_msg[:50] if len(error_msg) > 50 else error_msg)
+        self._hint_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
 
-        self._progress_bar.setVisible(False)
         self._stop_btn.setVisible(False)
         self._cancel_btn.setText("关闭")
 
-        # 3秒后自动关闭
-        QTimer.singleShot(3000, self._auto_close)
+        # 2秒后自动关闭
+        QTimer.singleShot(2000, self._auto_close)
 
     def set_no_speech(self) -> None:
         """未检测到语音。"""
@@ -381,39 +481,32 @@ class VoiceRecordDialog(QDialog):
 
         if self._countdown_timer:
             self._countdown_timer.stop()
-        self._wave_widget.stop()
 
         self._icon_label.setText("🔇")
         self._status_label.setText("未检测到语音")
-        self._status_label.setStyleSheet("color: #f39c12; font-size: 14px; font-weight: bold;")
-        self._hint_label.setText("请确认麦克风是否正常工作，然后重试")
-        self._hint_label.setStyleSheet("color: #888; font-size: 12px;")
+        self._status_label.setStyleSheet("color: #f39c12; font-size: 11px; font-weight: bold;")
+        self._hint_label.setText("请确认麦克风是否正常")
+        self._hint_label.setStyleSheet("color: #888; font-size: 11px;")
 
-        self._progress_bar.setVisible(False)
         self._stop_btn.setVisible(False)
         self._cancel_btn.setText("关闭")
 
-        # 3秒后自动关闭
-        QTimer.singleShot(3000, self._auto_close)
+        # 2秒后自动关闭
+        QTimer.singleShot(2000, self._auto_close)
 
     # ====== 对话模式支持 ======
 
     def start_listening(self) -> None:
-        """切换到持续监听状态（对话模式）。
-
-        不显示倒计时进度条，显示动态监听提示。
-        """
+        """切换到持续监听状态（对话模式）。"""
         self._state = RecordState.RECORDING
 
         self._icon_label.setText("🔴")
         self._status_label.setText("监听中...")
-        self._status_label.setStyleSheet("color: #ff4444; font-size: 14px; font-weight: bold;")
+        self._status_label.setStyleSheet("color: #ff4444; font-size: 11px; font-weight: bold;")
         self._hint_label.setText("请说话，系统会自动识别")
-        self._hint_label.setStyleSheet("color: #ff6b6b; font-size: 13px; font-weight: bold;")
+        self._hint_label.setStyleSheet("color: #ff6b6b; font-size: 11px;")
 
-        self._wave_widget.start()
-        self._progress_bar.setVisible(False)
-        self._stop_btn.setText("⏹ 停止监听")
+        self._stop_btn.setText("⏹ 停止")
         self._stop_btn.setEnabled(True)
 
         self.show()
@@ -423,22 +516,15 @@ class VoiceRecordDialog(QDialog):
     # ====== 内部方法 ======
 
     def _on_countdown_tick(self) -> None:
-        """倒计时/计时更新。"""
+        """计时更新。"""
         self._elapsed += 0.1
 
         if self._vad_mode:
-            # VAD 模式：显示已录时长
-            self._status_label.setText(f"录音中... {self._elapsed:.1f}s")
-            # 达到最大时长自动停止计时器
+            self._status_label.setText(f"录音中 {self._elapsed:.1f}s")
             if self._elapsed >= self._duration:
                 if self._countdown_timer:
                     self._countdown_timer.stop()
         else:
-            # 定时模式：显示倒计时进度条
-            progress = int(self._elapsed * 10)
-            self._progress_bar.setValue(min(progress, self._progress_bar.maximum()))
-            self._progress_bar.setFormat(f"{self._elapsed:.1f} / {self._duration:.0f} 秒")
-
             if self._elapsed >= self._duration:
                 if self._countdown_timer:
                     self._countdown_timer.stop()
@@ -451,12 +537,11 @@ class VoiceRecordDialog(QDialog):
         """取消按钮。"""
         if self._countdown_timer:
             self._countdown_timer.stop()
-        self._wave_widget.stop()
         self.cancelled.emit()
         self.close()
 
     def _auto_close(self) -> None:
-        """自动关闭（成功/失败后延迟关闭）。"""
+        """自动关闭。"""
         if self.isVisible():
             self.close()
 
@@ -464,5 +549,4 @@ class VoiceRecordDialog(QDialog):
         """关闭事件。"""
         if self._countdown_timer:
             self._countdown_timer.stop()
-        self._wave_widget.stop()
         super().closeEvent(event)

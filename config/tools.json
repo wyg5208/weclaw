@@ -1048,6 +1048,28 @@
         "require_confirmation": false
       },
       "actions": ["create_menu", "query_menu", "add_dish", "edit_dish", "delete_dish", "parse_image", "list_menus"]
+    },
+    "english_conversation": {
+      "enabled": true,
+      "module": "src.tools.english_conversation",
+      "class": "EnglishConversationTool",
+      "display": {
+        "name": "英语口语练习",
+        "emoji": "🗣️",
+        "description": "多主题场景英语口语对话练习，支持语音识别和语音合成，随时随地练习口语",
+        "category": "education"
+      },
+      "config": {
+        "default_difficulty": "intermediate",
+        "topics": ["restaurant", "airport", "hotel", "shopping", "travel", "daily_chat", "business"],
+        "enable_evaluation": true,
+        "tts_engine_for_dialog": "edge_tts"
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["start_conversation", "respond", "end_conversation", "list_topics"]
     }
   },
   "categories": {

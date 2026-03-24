@@ -69,6 +69,8 @@ class GuiAgent(QObject):
     companion_care_message = Signal(str, str)  # (message, interaction_type) 陪伴消息
     deferred_tool_result = Signal(str)  # CFTA: 后台工具执行结果摘要
     deferred_tool_started = Signal()  # CFTA: 后台工具开始执行
+    cfta_activation_requested = Signal()  # 英语对话：请求激活持续对话模式
+    voice_transcription = Signal(str)  # 实时语音转录结果（用于更新输入框）
 
     def __init__(self, agent: Agent, model_registry: ModelRegistry) -> None:
         super().__init__()
@@ -157,6 +159,11 @@ class GuiAgent(QObject):
                 # 如果有 html_image，发送到 GUI 显示
                 if hasattr(data, 'html_image') and data.html_image:
                     self.message_chunk.emit(data.html_image)
+                
+                # 如果工具返回 activate_cfta=True，自动激活持续对话模式
+                if hasattr(data, 'data') and data.data and data.data.get('activate_cfta'):
+                    logger.info("英语对话工具请求激活持续对话模式")
+                    self.cfta_activation_requested.emit()
 
             async def _on_reasoning(event_type, data):
                 nonlocal _reasoning_started
@@ -857,6 +864,12 @@ class WinClawGuiApp:
         )
         self._gui_agent.deferred_tool_result.connect(self._on_deferred_tool_result)
         
+        # 英语对话：自动激活持续对话模式
+        self._gui_agent.cfta_activation_requested.connect(self._on_activate_cfta)
+
+        # 实时语音转录结果
+        self._gui_agent.voice_transcription.connect(self._on_voice_transcription)
+
         # TTS 朗读
         self._gui_agent.tts_requested.connect(self._on_tts_speak)
         # 流式 TTS 朗读（边生成边播放）
@@ -880,6 +893,7 @@ class WinClawGuiApp:
         # 语音功能
         self._window.voice_record_requested.connect(self._on_voice_record)
         self._window.voice_stop_requested.connect(self._on_voice_stop)
+        self._window.voice_cancel_requested.connect(self._on_voice_dialog_cancelled)
         self._window.tts_toggle_requested.connect(self._on_tts_toggle)
 
         # 生成空间
@@ -1920,12 +1934,46 @@ class WinClawGuiApp:
         dlg = CronJobDialog(tool, self._window)
         dlg.exec()
 
+    def _stop_all_tts(self) -> None:
+        """停止所有TTS播放（普通TTS和流式TTS）。
+        
+        当用户开始新的语音输入时调用，确保新旧对话语音不会混淆。
+        包括：
+        1. 停止TTS播放器的当前播放并清空队列
+        2. 重置流式TTS状态
+        3. 通知ConversationManager TTS已结束
+        """
+        if not self._window:
+            return
+        
+        # 停止TTS播放器
+        if self._window._tts_player:
+            if self._window._tts_player.is_playing:
+                logger.info("录音开始，停止当前TTS播放")
+                self._window._tts_player.stop()
+        
+        
+        # 重置流式TTS状态并通知ConversationManager
+        if self._window._conversation_mgr:
+            self._window._conversation_mgr.set_streaming_tts_active(False)
+            # 不调用 on_tts_finished()，因为录音会自动启动新的对话流程
+        
+        logger.debug("TTS播放已停止，准备开始新的语音输入")
+
     def _on_voice_record(self) -> None:
-        """处理录音请求。"""
+        """处理录音请求。
+
+        当用户主动点击录音按钮时，首先停止所有正在进行的TTS播放，
+        防止新旧对话语音混淆。
+        使用内联录音状态显示，而不是弹出对话框。
+        """
+        # 【关键修复】首先停止所有TTS播放，防止新旧对话语音混淆
+        self._stop_all_tts()
+
         if not self._task_runner or not self._window:
             logger.warning("录音请求被忽略: task_runner=%s, window=%s", self._task_runner, self._window)
             return
-        
+
         # 检查语音工具是否可用
         try:
             from src.tools.voice_input import VoiceInputTool
@@ -1938,28 +1986,18 @@ class WinClawGuiApp:
             )
             self._window.reset_voice_button()
             return
-        
+
         # 更新状态
         self._window.set_tool_status("录音中... (说完自动停止)")
-        
+
         # 读取配置
         voice_config = self._load_voice_config()
         max_duration = voice_config.get("max_duration", 30)
         auto_stop = voice_config.get("auto_stop", True)
-        
-        # 创建并显示录音弹窗
-        try:
-            from .voice_record_dialog import VoiceRecordDialog
-            self._voice_dialog = VoiceRecordDialog(
-                duration=max_duration, parent=self._window, vad_mode=auto_stop
-            )
-            self._voice_dialog.stop_requested.connect(self._on_voice_stop)
-            self._voice_dialog.cancelled.connect(self._on_voice_dialog_cancelled)
-            self._voice_dialog.start_recording()
-        except Exception as e:
-            logger.exception("创建录音弹窗失败: %s", e)
-            # 弹窗创建失败不影响录音流程
-        
+
+        # 显示内联录音状态UI（不使用弹出对话框）
+        self._window.show_voice_recording_ui()
+
         # 启动录音任务
         self._recording_task = self._task_runner.run(
             "voice_record",
@@ -1978,51 +2016,58 @@ class WinClawGuiApp:
             logger.warning("停止录音失败: %s", e)
 
     def _on_voice_dialog_cancelled(self) -> None:
-        """录音弹窗被取消。"""
+        """录音被取消。"""
         if self._window:
-            self._window.reset_voice_button()
+            self._window.hide_voice_recording_ui()
             self._window.set_tool_status("空闲")
 
+    def _on_voice_transcription(self, text: str) -> None:
+        """处理实时语音转录结果（从后台线程发来）。
+
+        将转录文本追加到输入框中。
+        """
+        if self._window and text.strip():
+            self._window.append_input_text(text)
+            logger.info("实时转录更新输入框: %s", text[:30])
+
     def _on_agent_tool_call_started(self, tool_name: str, action: str) -> None:
-        """Agent 调用工具时的回调，检测录音工具并弹出弹窗。"""
+        """Agent 调用工具时的回调，检测录音工具并显示内联状态。
+    
+        当 Agent 调用录音工具时，首先停止所有正在进行的TTS播放，
+        防止新旧对话语音混淆。
+        """
         if tool_name != "voice_input" or action not in ("record_and_transcribe", "record_audio"):
             return
         if not self._window:
             return
-
-        try:
-            from .voice_record_dialog import VoiceRecordDialog
-            # 从配置读取录音参数
-            voice_config = self._load_voice_config()
-            max_duration = voice_config.get("max_duration", 30)
-            auto_stop = voice_config.get("auto_stop", True)
-            self._voice_dialog = VoiceRecordDialog(
-                duration=max_duration, parent=self._window, vad_mode=auto_stop
-            )
-            self._voice_dialog.cancelled.connect(self._on_voice_dialog_cancelled)
-            self._voice_dialog.start_recording()
-            logger.info("Agent 调用录音工具，已弹出录音弹窗 (VAD=%s)", auto_stop)
-        except Exception as e:
-            logger.exception("Agent 路径创建录音弹窗失败: %s", e)
+    
+        # 【关键修复】首先停止所有TTS播放，防止新旧对话语音混淆
+        self._stop_all_tts()
+    
+        # 显示内联录音状态UI
+        self._window.show_voice_recording_ui()
+        logger.info("Agent 调用录音工具，已显示内联录音状态")
 
     def _on_agent_tool_call_finished(self, tool_name: str, action: str, result_preview: str) -> None:
-        """Agent 工具执行完毕的回调，更新录音弹窗状态。"""
+        """Agent 工具执行完毕的回调，更新内联录音状态。"""
         if tool_name != "voice_input" or action != "record_and_transcribe":
-            return
-
-        dialog = getattr(self, '_voice_dialog', None)
-        if not dialog or not dialog.isVisible():
             return
 
         try:
             if "录音转录成功" in result_preview:
-                dialog.set_success("语音已识别，AI 正在处理...")
+                self._window.set_voice_status("✅ 完成")
+                # 1.5秒后隐藏录音UI
+                QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
             elif "未识别" in result_preview or not result_preview.strip():
-                dialog.set_no_speech()
+                self._window.set_voice_status("🔇 无语音")
+                # 1.5秒后隐藏录音UI
+                QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
             else:
-                dialog.set_error(result_preview[:100] if result_preview else "识别失败")
+                self._window.set_voice_status("❌ 失败")
+                # 2秒后隐藏录音UI
+                QTimer.singleShot(2000, self._window.hide_voice_recording_ui)
         except Exception as e:
-            logger.exception("更新录音弹窗状态失败: %s", e)
+            logger.exception("更新录音状态失败: %s", e)
 
     def _on_whisper_model_changed(self, model_name: str) -> None:
         """处理 Whisper 模型切换。"""
@@ -2131,6 +2176,16 @@ class WinClawGuiApp:
         self._window.add_tool_log("✅ 后台工具执行完成")
         logger.info("[CFTA] 后台工具结果已显示")
 
+    def _on_activate_cfta(self) -> None:
+        """英语对话：自动激活持续对话模式。"""
+        if not self._window:
+            return
+        
+        # 设置持续对话模式
+        self._window._conversation_mode_combo.setCurrentIndex(1)  # 0=off, 1=continuous, 2=wake_word
+        self._window.add_tool_log("🎤 英语对话：自动激活持续对话模式")
+        logger.info("英语对话：持续对话模式已激活")
+
     def _on_agent_message_finished(self, full_content: str) -> None:
         """Agent 消息生成完成回调。"""
         if not self._window:
@@ -2187,11 +2242,16 @@ class WinClawGuiApp:
             self._window._conversation_mgr.set_streaming_tts_active(True)
 
     def _on_streaming_tts_finished(self) -> None:
-        """流式 TTS 播放结束，通知 ConversationManager 恢复监听。"""
+        """流式 TTS 生成结束，重置流式状态。
+        
+        注意：此方法在 LLM 生成完成时调用，但 TTS 播放队列可能还有句子在播放。
+        不应在此处恢复监听，而是等待 TTSPlayer.playback_finished 信号触发。
+        """
         if self._window and self._window._conversation_mgr:
             self._window._conversation_mgr.set_streaming_tts_active(False)
-            # 手动触发监听恢复
-            self._window._conversation_mgr.on_tts_finished()
+            # 【关键修复】不在此处调用 on_tts_finished()
+            # 监听恢复由 TTSPlayer.playback_finished 信号 -> _on_tts_playback_finished() 控制
+            # 这样确保 TTS 队列真正播完后才恢复监听，避免新旧对话语音混淆
 
     async def _speak_text(self, text: str) -> None:
         """朗读文本。"""
@@ -2222,71 +2282,81 @@ class WinClawGuiApp:
                 self._window.add_tool_log(f"❌ TTS 错误: {e}")
 
     async def _record_and_transcribe(self) -> None:
-        """录音并转为文字（使用 VAD 智能录音）。"""
+        """录音并转为文字（使用 VAD 智能录音，支持实时识别）。"""
         from src.tools.voice_input import VoiceInputTool
-        
+
         try:
             tool = VoiceInputTool()
             self._active_voice_tool = tool  # 保存引用，供手动停止使用
-            
+
             # 使用配置的 Whisper 模型和录音参数
             model = self._whisper_model
             voice_config = self._load_voice_config()
             max_duration = voice_config.get("max_duration", 30)
             auto_stop = voice_config.get("auto_stop", True)
-            
+
             logger.info("录音使用 Whisper 模型: %s, max_duration=%s, auto_stop=%s",
                         model, max_duration, auto_stop)
-            
-            # 录音（VAD 模式）
+
+            # 清空输入框（准备接收实时识别结果）
+            if self._window:
+                self._window.set_input_text("")
+
+            # 创建实时转录回调（通过信号更新UI，线程安全）
+            def on_speech_segment(text: str, is_final: bool):
+                """实时转录回调，将结果发送到主线程更新UI。"""
+                if self._gui_agent and text.strip():
+                    self._gui_agent.voice_transcription.emit(text)
+
+            # 录音（VAD 模式，带实时识别回调）
             result = await tool.execute(
                 "record_and_transcribe",
                 {"duration": max_duration, "auto_stop": auto_stop,
-                 "model": model, "language": "zh"}
+                 "model": model, "language": "zh",
+                 "on_speech_segment": on_speech_segment}
             )
-            
-            # 更新弹窗为识别处理中
-            if hasattr(self, '_voice_dialog') and self._voice_dialog and self._voice_dialog.isVisible():
-                self._voice_dialog.set_processing()
-            
+
+            # 更新为识别处理中状态
+            if self._window:
+                self._window.set_voice_status("⏳ 识别中...")
+
             if result.status == ToolResultStatus.SUCCESS and self._window:
                 text = result.data.get("text", "")
-                if text.strip():
-                    # 将识别结果填入输入框
+                current_input = self._window.get_input_text().strip()
+
+                if current_input:
+                    # 已有实时识别结果，更新状态
+                    self._window.set_tool_status(f"录音识别完成: {len(current_input)} 字")
+                    self._window.add_tool_log(f"🎤 识别: {current_input[:50]}...")
+                    self._window.set_voice_status("✅ 完成")
+                elif text.strip():
+                    # 没有实时结果但有最终结果（兼容旧模式）
                     self._window.set_input_text(text)
                     self._window.set_tool_status(f"录音识别完成: {len(text)} 字")
                     self._window.add_tool_log(f"🎤 识别: {text[:50]}...")
-                    # 弹窗显示成功
-                    if hasattr(self, '_voice_dialog') and self._voice_dialog and self._voice_dialog.isVisible():
-                        self._voice_dialog.set_success(text)
+                    self._window.set_voice_status("✅ 完成")
                 else:
                     self._window.set_tool_status("未识别到语音")
                     self._window.add_tool_log("⚠️ 未识别到有效语音")
-                    # 弹窗显示无语音
-                    if hasattr(self, '_voice_dialog') and self._voice_dialog and self._voice_dialog.isVisible():
-                        self._voice_dialog.set_no_speech()
+                    self._window.set_voice_status("🔇 无语音")
             else:
                 if self._window:
                     error_msg = result.error or "识别失败"
                     self._window.set_tool_status(f"录音失败: {error_msg}")
                     self._window.add_tool_log(f"❌ {error_msg}")
-                    # 弹窗显示错误
-                    if hasattr(self, '_voice_dialog') and self._voice_dialog and self._voice_dialog.isVisible():
-                        self._voice_dialog.set_error(error_msg)
-        
+                    self._window.set_voice_status("❌ 失败")
+
         except Exception as e:
             logger.exception("录音转文字失败")
             if self._window:
                 self._window.set_tool_status(f"录音错误: {e}")
                 self._window.add_tool_log(f"❌ 录音错误: {e}")
-            # 弹窗显示错误
-            if hasattr(self, '_voice_dialog') and self._voice_dialog and self._voice_dialog.isVisible():
-                self._voice_dialog.set_error(str(e))
-        
+                self._window.set_voice_status("❌ 错误")
+
         finally:
-            # 重置按钮状态
+            # 延迟重置按钮状态（让用户看到结果）
             if self._window:
-                self._window.reset_voice_button()
+                QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
                 self._window.set_tool_status("空闲")
     
     # ===== 工作流相关 =====

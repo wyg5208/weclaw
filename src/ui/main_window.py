@@ -109,6 +109,7 @@ class MainWindow(QMainWindow):
     close_to_tray = Signal()  # 关闭到托盘
     voice_record_requested = Signal()  # 请求录音
     voice_stop_requested = Signal()  # 请求停止录音
+    voice_cancel_requested = Signal()  # 请求取消录音
     tts_toggle_requested = Signal(bool)  # 请求切换 TTS
     generated_space_requested = Signal()  # 打开生成空间
     generated_space_clear_requested = Signal()  # 清空生成空间记录
@@ -124,7 +125,7 @@ class MainWindow(QMainWindow):
     history_refresh_requested = Signal()  # 刷新历史对话列表
     history_session_selected = Signal(str)  # 选择历史会话(session_id)
     history_session_delete_requested = Signal(str)  # 删除历史会话(session_id)
-    conversation_mode_changed = Signal(str)  # 对话模式切换 (off/continuous/wake_word)
+    conversation_mode_changed = Signal(str)  # 对话模式切换 (off/continuous)
     conversation_state_changed = Signal(str)  # 对话状态变化 (idle/listening/chatting/thinking/speaking)
     theme_changed = Signal(str)  # 主题切换 (light/dark/system)
     language_changed = Signal(str)  # 语言切换 (zh_CN/en_US)
@@ -148,7 +149,7 @@ class MainWindow(QMainWindow):
         self._tts_enabled = False  # TTS 开启状态
 
         # 对话模式状态
-        self._conversation_mode = "off"  # off/continuous/wake_word
+        self._conversation_mode = "off"  # off/continuous
         self._conversation_state = "idle"  # idle/listening/chatting/thinking/speaking
 
         # 对话模式管理器
@@ -891,7 +892,27 @@ class MainWindow(QMainWindow):
         self._voice_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 70px; max-width: 80px;")
         self._voice_btn.clicked.connect(self._on_voice_record)
         toolbar.addWidget(self._voice_btn)
-        
+
+        # 录音状态标签（录音时显示时长和状态）
+        self._voice_status_label = QLabel("")
+        self._voice_status_label.setStyleSheet(
+            "color: #ff4444; font-size: 11px; font-weight: bold; "
+            "padding: 4px 8px; background-color: #fff0f0; border-radius: 4px;"
+        )
+        self._voice_status_label.setVisible(False)
+        toolbar.addWidget(self._voice_status_label)
+
+        # 录音取消按钮（录音时显示）
+        self._voice_cancel_btn = QPushButton(tr("✕ 取消"))
+        self._voice_cancel_btn.setToolTip(tr("取消当前录音"))
+        self._voice_cancel_btn.setStyleSheet(
+            "font-size: 10px; padding: 4px 8px; background-color: #f0f0f0; "
+            "border: 1px solid #ddd; border-radius: 4px;"
+        )
+        self._voice_cancel_btn.setVisible(False)
+        self._voice_cancel_btn.clicked.connect(self._on_voice_cancel)
+        toolbar.addWidget(self._voice_cancel_btn)
+
         # TTS 开关按钮
         self._tts_btn = QPushButton(tr("🔇 TTS"))
         self._tts_btn.setToolTip(tr("切换 AI 回复自动朗读"))
@@ -901,19 +922,16 @@ class MainWindow(QMainWindow):
         self._tts_btn.clicked.connect(self._on_tts_toggle)
         toolbar.addWidget(self._tts_btn)
 
-        # 对话模式开关（下拉菜单）
-        self._conversation_mode_combo = QComboBox()
-        self._conversation_mode_combo.setMinimumWidth(120)
-        self._conversation_mode_combo.setStyleSheet("font-size: 11px; padding: 3px 6px;")
-        self._conversation_mode_combo.addItems([
-            tr("💬 对话模式"),
-            tr("⚡ 持续对话"),
-            tr("🔔 唤醒词模式"),
-        ])
-        self._conversation_mode_combo.setCurrentIndex(0)
-        self._conversation_mode_combo.setToolTip(tr("选择对话模式，开启后实现语音交互"))
-        self._conversation_mode_combo.currentIndexChanged.connect(self._on_conversation_mode_changed)
-        toolbar.addWidget(self._conversation_mode_combo)
+        # 持续对话模式开关按钮
+        self._continuous_btn = QPushButton(tr("⚡ 持续对话"))
+        self._continuous_btn.setToolTip(tr("开关持续对话模式，开启后语音连续交互"))
+        self._continuous_btn.setCheckable(True)
+        self._continuous_btn.setChecked(False)
+        self._continuous_btn.setStyleSheet(
+            "font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px;"
+        )
+        self._continuous_btn.clicked.connect(self._on_continuous_toggle)
+        toolbar.addWidget(self._continuous_btn)
 
         # 对话状态标签
         self._conversation_status_label = QLabel("")
@@ -2212,15 +2230,56 @@ class MainWindow(QMainWindow):
         if not self._is_recording:
             # 开始录音
             self._is_recording = True
-            self._voice_btn.setText("🔴 录音中...")
+            self._voice_btn.setText("⏹ 停止")
             self._voice_btn.setStyleSheet("background-color: #ff4444; color: white;")
+            # 显示录音状态标签和取消按钮
+            self._voice_status_label.setText("🔴 0.0s")
+            self._voice_status_label.setVisible(True)
+            self._voice_cancel_btn.setVisible(True)
             self.voice_record_requested.emit()
         else:
             # 停止录音
             self._is_recording = False
             self._voice_btn.setText("🎤 录音")
             self._voice_btn.setStyleSheet("")
+            # 隐藏录音状态标签和取消按钮
+            self._voice_status_label.setVisible(False)
+            self._voice_cancel_btn.setVisible(False)
             self.voice_stop_requested.emit()
+
+    def _on_voice_cancel(self) -> None:
+        """处理取消录音按钮点击。"""
+        self._is_recording = False
+        self._voice_btn.setText("🎤 录音")
+        self._voice_btn.setStyleSheet("")
+        # 隐藏录音状态标签和取消按钮
+        self._voice_status_label.setVisible(False)
+        self._voice_cancel_btn.setVisible(False)
+        self.voice_cancel_requested.emit()
+
+    def set_voice_status(self, status_text: str) -> None:
+        """更新录音状态显示。
+
+        Args:
+            status_text: 状态文本，如 "🔴 1.5s" 或 "⏳ 识别中..."
+        """
+        self._voice_status_label.setText(status_text)
+
+    def show_voice_recording_ui(self) -> None:
+        """显示录音中的UI状态。"""
+        self._is_recording = True
+        self._voice_btn.setText("⏹ 停止")
+        self._voice_btn.setStyleSheet("background-color: #ff4444; color: white;")
+        self._voice_status_label.setVisible(True)
+        self._voice_cancel_btn.setVisible(True)
+
+    def hide_voice_recording_ui(self) -> None:
+        """隐藏录音中的UI状态。"""
+        self._is_recording = False
+        self._voice_btn.setText("🎤 录音")
+        self._voice_btn.setStyleSheet("")
+        self._voice_status_label.setVisible(False)
+        self._voice_cancel_btn.setVisible(False)
     
     def _on_tts_toggle(self, checked: bool) -> None:
         """处理 TTS 开关切换。"""
@@ -2231,15 +2290,21 @@ class MainWindow(QMainWindow):
             self._tts_btn.setText("🔇 TTS")
         self.tts_toggle_requested.emit(checked)
 
-    def _on_conversation_mode_changed(self, index: int) -> None:
-        """处理对话模式切换。"""
-        mode_map = {
-            0: "off",
-            1: "continuous",
-            2: "wake_word",
-        }
-        mode = mode_map.get(index, "off")
+    def _on_continuous_toggle(self, checked: bool) -> None:
+        """处理持续对话模式开关切换。"""
+        mode = "continuous" if checked else "off"
         self._conversation_mode = mode
+
+        # 更新按钮样式
+        if checked:
+            self._continuous_btn.setStyleSheet(
+                "font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px; "
+                "background-color: #28a745; color: white;"
+            )
+        else:
+            self._continuous_btn.setStyleSheet(
+                "font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px;"
+            )
 
         # 调用ConversationManager设置模式
         if self._conversation_mgr:
@@ -2253,7 +2318,6 @@ class MainWindow(QMainWindow):
         mode_texts = {
             "off": ("", False),
             "continuous": (tr("⚡ 持续对话中..."), True),
-            "wake_word": (tr("🔔 等待唤醒词..."), True),
         }
         text, visible = mode_texts.get(self._conversation_mode, ("", False))
         self._conversation_status_label.setText(text)
@@ -2263,7 +2327,6 @@ class MainWindow(QMainWindow):
         color_map = {
             "off": "#888",
             "continuous": "#28a745",  # 绿色
-            "wake_word": "#0078d4",  # 蓝色
         }
         color = color_map.get(self._conversation_mode, "#888")
         self._conversation_status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
@@ -2283,6 +2346,23 @@ class MainWindow(QMainWindow):
         """设置输入框文字。"""
         self._input_edit.setPlainText(text)
         self._input_edit.setFocus()  # 聚焦到输入框
+
+    def append_input_text(self, text: str) -> None:
+        """追加文字到输入框末尾。
+
+        用于实时语音识别，逐步显示识别结果。
+        """
+        current = self._input_edit.toPlainText()
+        if current:
+            # 如果已有内容，添加空格分隔
+            self._input_edit.setPlainText(current + " " + text)
+        else:
+            self._input_edit.setPlainText(text)
+        self._input_edit.setFocus()
+
+    def get_input_text(self) -> str:
+        """获取输入框文字。"""
+        return self._input_edit.toPlainText()
     
     @property
     def attachment_manager(self) -> AttachmentManager:

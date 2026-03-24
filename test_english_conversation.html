@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>餐厅点餐 - Restaurant Dining</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        /* 头部 */
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+        
+        .header h1 {
+            color: #667eea;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        
+        .header .subtitle {
+            color: #666;
+            font-size: 18px;
+            font-style: italic;
+        }
+        
+        /* 主内容区 */
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        /* 左侧面板 */
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        /* 场景图片 */
+        .scene-section {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .scene-section h2 {
+            color: #667eea;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .scene-image {
+            width: 100%;
+            height: 400px;
+            object-fit: cover;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .placeholder-scene {
+            width: 100%;
+            height: 400px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: #666;
+        }
+        
+        /* 对话区域 */
+        .dialogue-section {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            flex-grow: 1;
+        }
+        
+        .dialogue-section h2 {
+            color: #667eea;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .dialogue-container {
+            max-height: 500px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        
+        .dialogue-line {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease-in;
+        }
+        
+        .dialogue-line.user {
+            align-items: flex-end;
+        }
+        
+        .dialogue-line.ai {
+            align-items: flex-start;
+        }
+        
+        .speaker {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        
+        .bubble {
+            max-width: 80%;
+            padding: 15px 20px;
+            border-radius: 18px;
+            position: relative;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .dialogue-line.user .bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .dialogue-line.ai .bubble {
+            background: #f0f0f0;
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+        
+        .english {
+            font-size: 16px;
+            line-height: 1.6;
+        }
+        
+        .chinese-tip {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        
+        /* 右侧面板 */
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        /* 角色卡片 */
+        .character-section {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+        
+        .character-section h2 {
+            color: #667eea;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .character-image {
+            width: 200px;
+            height: 200px;
+            object-fit: cover;
+            border-radius: 50%;
+            border: 5px solid #667eea;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .placeholder-character {
+            width: 200px;
+            height: 200px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            margin: 0 auto;
+        }
+        
+        /* 词汇卡片 */
+        .vocab-section {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .vocab-section h2 {
+            color: #667eea;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .vocab-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+        }
+        
+        .vocab-item {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px;
+            border-radius: 10px;
+            text-align: center;
+            transition: transform 0.2s;
+        }
+        
+        .vocab-item:hover {
+            transform: translateY(-3px);
+        }
+        
+        .vocab-item strong {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        
+        .vocab-item span {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+        
+        /* 动画 */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        /* 滚动条美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .character-section, .vocab-section {
+                order: -1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <div class="header">
+            <h1>🗣️ 餐厅点餐</h1>
+            <div class="subtitle">Restaurant Dining</div>
+        </div>
+        
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- 左侧：场景 + 对话 -->
+            <div class="left-panel">
+                <!-- 场景图片 -->
+                <div class="scene-section">
+                    <h2>🎬 场景</h2>
+                    <div class="placeholder-scene">🎬 场景加载中...</div>
+                </div>
+                
+                <!-- 对话区域 -->
+                
+            <div class="dialogue-section">
+                <h3>💬 对话记录</h3>
+                <div class="dialogue-container">
+                <div class="dialogue-line ai">
+                    <div class="speaker">Waiter</div>
+                    <div class="bubble">
+                        <div class="english">Good evening! Welcome to our restaurant.</div>
+                        <div class="chinese-tip">晚上好！欢迎光临我们餐厅。</div>
+                    </div>
+                </div>
+                
+                <div class="dialogue-line user">
+                    <div class="speaker">You</div>
+                    <div class="bubble">
+                        <div class="english">I'd like to order some food.</div>
+                        
+                    </div>
+                </div>
+                </div>
+            </div>
+            
+            </div>
+            
+            <!-- 右侧：角色 + 词汇 -->
+            <div class="right-panel">
+                <!-- 角色形象 -->
+                <div class="character-section">
+                    <h2>👤 AI 角色</h2>
+                    <div class="placeholder-character">👤 角色加载中...</div>
+                </div>
+                
+                <!-- 词汇卡片 -->
+                
+            <div class="vocab-section">
+                <h3>📚 关键词汇</h3>
+                <div class="vocab-grid"><div class="vocab-item"><strong>menu</strong><span>菜单</span></div><div class="vocab-item"><strong>order</strong><span>点餐</span></div><div class="vocab-item"><strong>steak</strong><span>牛排</span></div><div class="vocab-item"><strong>wine</strong><span>葡萄酒</span></div></div>
+            </div>
+            
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 自动滚动到底部
+        const dialogueContainer = document.querySelector('.dialogue-container');
+        if (dialogueContainer) {
+            dialogueContainer.scrollTop = dialogueContainer.scrollHeight;
+        }
+    </script>
+</body>
+</html>

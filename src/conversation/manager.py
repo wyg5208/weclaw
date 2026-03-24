@@ -6,12 +6,105 @@
 from __future__ import annotations
 
 import logging
+import re
 from enum import Enum
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, Signal, QTimer
 
 logger = logging.getLogger(__name__)
+
+
+# ========== 噪音过滤配置 ==========
+
+class NoiseFilterConfig:
+    """噪音过滤配置。
+    
+    用于过滤语音识别产生的无意义输入，避免AI回复废话。
+    """
+    
+    # 纯符号模式（只包含标点符号、空格、特殊字符）
+    PURE_SYMBOL_PATTERN = re.compile(r'^[\s\.,;:!\?，。；：！？、\-_\(\)\[\]（）“”"\'\'…~`@#$%^&*+=|\\<>\/]+$')
+    
+    # 单字语气词（常见无意义语气词）
+    SINGLE_FILLERS = {
+        # 中文语气词
+        '嗯', '啊', '哦', '呃', '哈', '额', '唉', '哎', '噢', '咦',
+        '唔', '唔', '哼', '嘿', '哇', '耶', '咯', '啦', '嘞', '哒',
+        # 英文语气词
+        'uh', 'oh', 'ah', 'um', 'hm', 'eh', 'ha', 'mm', 'hmm',
+        # 常见杂音识别结果
+        '。', '，', '、', '...', '。。', '。。。',
+    }
+    
+    # 双字语气词组合
+    DOUBLE_FILLERS = {
+        '嗯嗯', '啊啊', '哦哦', '呃呃', '哈哈', '嘿嘿', '嗯啊', '啊嗯',
+        '哦啊', '嗯哦', '好的', '好的', '那个', '这个', '就是',
+        '然后', '所以', '因为', '但是', '不过', '其实',
+    }
+    
+    # 最小有效输入长度（中文按字，英文按词）
+    MIN_EFFECTIVE_LENGTH = 2
+    
+    # 无意义短语模式（语音识别常见的错误输出）
+    MEANINGLESS_PHRASES = [
+        # 通用废话模式（注意：不包含“好”、“是”、“对”、“行”等有意义短词）
+        r'^(好的|可以|嗯|哦)[，。！？,.!?]*$',
+        r'^(我在这里|需要什么帮助|请告诉我)[，。！？,.!?]*$',
+        # 纯数字
+        r'^\d+[.,，。]*$',
+        # 纯标点
+        r'^[\s\.,;:!\?，。；：！？、\-_]+$'
+    ]
+    
+    @classmethod
+    def is_noise(cls, text: str) -> bool:
+        """检查文本是否为噪音/无意义输入。
+        
+        Args:
+            text: 待检查的文本
+            
+        Returns:
+            True 表示是噪音，应忽略；False 表示是有效输入
+        """
+        if not text:
+            return True
+            
+        # 1. 去除首尾空白
+        text = text.strip()
+        if not text:
+            return True
+            
+        # 2. 检查纯符号
+        if cls.PURE_SYMBOL_PATTERN.match(text):
+            logger.debug(f"噪音过滤(纯符号): {text!r}")
+            return True
+            
+        # 3. 检查单字语气词
+        if text in cls.SINGLE_FILLERS:
+            logger.debug(f"噪音过滤(单字语气词): {text!r}")
+            return True
+            
+        # 4. 检查双字语气词
+        if text in cls.DOUBLE_FILLERS:
+            logger.debug(f"噪音过滤(双字语气词): {text!r}")
+            return True
+            
+        # 5. 检查无意义短语模式
+        for pattern in cls.MEANINGLESS_PHRASES:
+            if re.match(pattern, text, re.IGNORECASE):
+                logger.debug(f"噪音过滤(无意义短语): {text!r}")
+                return True
+                
+        # 6. 检查过短输入（但排除一些有意义的短词）
+        meaningful_shorts = {'是', '好', '行', '对', '不', '否', '来', '去', '吃', '喝', '睡',
+                            'ok', 'yes', 'no', 'go', 'hi', 'hey'}
+        if len(text) < cls.MIN_EFFECTIVE_LENGTH and text.lower() not in meaningful_shorts:
+            logger.debug(f"噪音过滤(过短输入): {text!r}")
+            return True
+            
+        return False
 
 
 class ConversationMode(Enum):
@@ -193,6 +286,11 @@ class ConversationManager(QObject):
             is_final: 是否为最终结果
         """
         if not text:
+            return
+
+        # 噪音过滤：忽略无意义的语音识别结果
+        if NoiseFilterConfig.is_noise(text):
+            logger.info(f"忽略噪音输入: {text!r}")
             return
 
         logger.info(f"语音识别结果: {text} (final={is_final})")
