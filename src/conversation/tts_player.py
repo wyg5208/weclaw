@@ -449,6 +449,9 @@ class TTSPlayer(QObject):
         self._is_paused = False
         self._current_text = ""
 
+        # 流式 TTS 模式标志：为 True 时 speak() 降级为 enqueue()，防止打断流式播放
+        self._is_streaming_active = False
+
         # 播放队列（流式模式用）
         self._sentence_queue: list[str] = []
 
@@ -483,13 +486,31 @@ class TTSPlayer(QObject):
     def engine(self) -> TTSEngine:
         return self._worker._active_engine or TTSEngine.PYTTSX3
 
+    @property
+    def is_streaming_active(self) -> bool:
+        """是否处于流式 TTS 模式（流式模式下 speak 降级为 enqueue）。"""
+        return self._is_streaming_active
+
+    @is_streaming_active.setter
+    def is_streaming_active(self, value: bool) -> None:
+        self._is_streaming_active = value
+
     def speak(self, text: str) -> None:
         """播放文本语音（非流式）。
 
         清空队列，停止当前播放，立即播放新文本。
         用于手动点击播放、非流式场景。
+
+        注意：当流式 TTS 模式激活时（is_streaming_active=True），
+        自动降级为 enqueue()，避免打断正在进行的流式播放。
         """
         if not text:
+            return
+
+        # 流式模式激活时，降级为 enqueue 防止打断
+        if self._is_streaming_active:
+            logger.info("TTS speak() 降级为 enqueue()（流式模式激活中）")
+            self.enqueue(text)
             return
 
         # 清空队列并停止当前播放
@@ -589,14 +610,27 @@ class TTSPlayer(QObject):
 
     @staticmethod
     def _preprocess_text(text: str) -> str:
-        """预处理文本，移除无法朗读的字符。"""
+        """预处理文本，移除无法朗读的字符（标点符号、Emoji、特殊符号）。"""
         # 移除特殊标记
         text = re.sub(r'<\|.*?\|>', '', text)
         text = re.sub(r'\[.*?\]', '', text)
-
-        # 移除Emoji（只匹配真正的emoji范围，避免误删CJK字符）
-        # 注意：不要使用大的Unicode范围如 \U000024C2-\U0001F251，
-        # 因为它会错误地包含CJK汉字范围 (U+4E00-U+9FFF)
+    
+        # 移除所有标点符号（中英文）
+        # 中文标点：，。！？；：、""''``……—～《》【】（）〔〕〈〉「」『』〖〗〘〙〚〛⸨⸩
+        # 英文标点：,.!?;:'"`~…–—·•
+        # 其他符号：@#$%^&*()_+-=[]{}|;':",./<>?\\等
+        punctuation_pattern = re.compile(
+            r'[，。！？；：、""\'\'``……—～《》【】（）〔〕〈〉「」『』〖〗〘〙〚〛⸨⸩'
+            r',.!?;:\'"`…–—·•'
+            r'@#$%^&*()_+\-=\[\]{}|;\':",./<>?\\'
+            r']+', 
+            flags=re.UNICODE
+        )
+        text = punctuation_pattern.sub(' ', text)
+    
+        # 移除 Emoji（只匹配真正的 emoji 范围，避免误删 CJK 字符）
+        # 注意：不要使用大的 Unicode 范围如 \U000024C2-\U0001F251，
+        # 因为它会错误地包含 CJK 汉字范围 (U+4E00-U+9FFF)
         emoji_pattern = re.compile(
             "["
             "\U0001F600-\U0001F64F"  # emoticons
@@ -609,9 +643,9 @@ class TTSPlayer(QObject):
             "]+", flags=re.UNICODE
         )
         text = emoji_pattern.sub('', text)
-
-        # 清理多余空白
+    
+        # 清理多余空白（多个空格合并为一个，去除首尾空格）
         text = re.sub(r'\s+', ' ', text)
         text = text.strip()
-
+    
         return text

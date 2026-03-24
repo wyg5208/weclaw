@@ -345,12 +345,13 @@ CRITICAL RULES:
 3. NEVER list options or suggestions
 4. Stay in character - respond naturally to move the dialogue forward
 5. {difficulty_instructions.get(session.difficulty, difficulty_instructions['intermediate'])}
-6. Only provide Chinese translation if the learner seems confused
+6. ONLY output English - NO Chinese, NO translations, NO explanations
+7. If user input is unclear, ask for clarification in English
 
 GOOD: "What would you like to order today?"
-BAD: "I can help you order. Here are some options: 1. steak 2. fish 3. salad. What would you like?"
+BAD: "I can help you order. Here are some options: 1. steak 2. fish. What would you like?"
 
-Remember: Less is more. Keep it natural."""
+Remember: Less is more. Keep it natural. Output ONLY English."""
     
     async def start_conversation(
         self,
@@ -533,6 +534,23 @@ Remember: Less is more. Keep it natural."""
                     error="用户输入为空"
                 )
             
+            # 过滤无效输入（语音识别错误）
+            if self._is_invalid_input(user_input):
+                logger.warning(f"检测到无效输入：{user_input[:50]}")
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    output="**I didn't catch that. Could you please repeat?**"
+                )
+            
+            # 检测退出请求
+            if self._is_exit_request(user_input):
+                logger.info("用户请求退出英语对话")
+                # 自动调用结束对话
+                end_result = await self.end_conversation(session_id, save_recording=False)
+                # 添加退出提示
+                end_result.output += "\n\n💡 You can start a new conversation anytime by saying 'Let's practice English!'"
+                return end_result
+            
             # 添加用户消息到上下文
             session.add_message("user", user_input)
             
@@ -616,6 +634,10 @@ Remember: Less is more. Keep it natural."""
             
             ai_response = response.choices[0].message.content.strip()
             logger.info(f"LLM 回复：{ai_response[:100]}")
+            
+            # 后处理：移除中文内容，确保纯英语输出
+            ai_response = self._filter_chinese_content(ai_response)
+            
             return ai_response
             
         except Exception as e:
@@ -654,6 +676,123 @@ Remember: Less is more. Keep it natural."""
         # 默认回复
         return "I see. Could you tell me more about that?"
     
+    def _filter_chinese_content(self, text: str) -> str:
+        """过滤中文内容，确保纯英语输出。
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            过滤后的纯英语文本
+        """
+        import re
+        
+        # 1. 移除括号中的中文内容（包括全角和半角括号）
+        # 匹配: (中文) 或 （中文）
+        text = re.sub(r'[\(\(][^)）]*[\u4e00-\u9fff]+[^)）]*[\)）]', '', text)
+        
+        # 2. 移除独立的中文句子
+        # 匹配连续的中文字符
+        text = re.sub(r'[\u4e00-\u9fff]+', '', text)
+        
+        # 3. 清理多余空格
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # 4. 如果文本为空或过短，返回默认回复
+        if len(text) < 3:
+            return "Could you please repeat that?"
+        
+        return text
+    
+    def _is_invalid_input(self, text: str) -> bool:
+        """检测是否为无效输入（语音识别错误）。
+            
+        Args:
+            text: 用户输入文本
+                
+        Returns:
+            是否为无效输入
+        """
+        text_lower = text.lower().strip()
+            
+        # 1. 描述性语句（而非对话）
+        invalid_patterns = [
+            "sighs and footsteps",  # 语音识别噪音
+            "sound of someone",     # 声音描述
+            "audio ",              # 音频标记
+            "[noise]",             # 噪音标记
+            "(background",         # 背景音标记
+        ]
+            
+        for pattern in invalid_patterns:
+            if pattern in text_lower:
+                return True
+            
+            
+        # 2. 纯中文输入（可能是误操作）
+        import re
+        chinese_chars = re.findall(r'[\u4e00-\u9fff]', text)
+        if len(chinese_chars) > len(text) * 0.8:  # 80% 以上是中文
+            return True
+            
+            
+        # 3. 过长的描述性文本（超过 100 字符且没有对话特征）
+        if len(text) > 100 and not any(c in text for c in ['?', '!', '.', ',',]):
+            return True
+            
+            
+        return False
+        
+    def _is_exit_request(self, text: str) -> bool:
+        """检测用户是否想退出对话模式。
+            
+        Args:
+            text: 用户输入文本
+                
+        Returns:
+            是否为退出请求
+        """
+        text_lower = text.lower().strip()
+            
+        # 退出关键词
+        exit_patterns = [
+            # 英文退出
+            "stop the conversation",
+            "end the conversation",
+            "quit the conversation",
+            "exit the conversation",
+            "stop practicing",
+            "stop english",
+            "end practice",
+            "i want to stop",
+            "i'd like to stop",
+            "let's stop",
+            "goodbye",
+            "bye",
+            "see you",
+            "that's all",
+            "enough for today",
+            "done for today",
+            "practice is over",
+            "finish",
+            "that's it",
+            "i'm done",
+                
+            # 中文退出（检测以便处理双语用户）
+            "结束对话",
+            "停止练习",
+            "退出",
+            "不练了",
+            "今天就到这里",
+            "再见",
+        ]
+            
+        for pattern in exit_patterns:
+            if pattern in text_lower:
+                return True
+            
+        return False
+        
     def _parse_ai_response(self, response: str) -> tuple[str, Optional[str]]:
         """解析 AI 回复，分离英文内容和中文提示。"""
         # 查找括号中的中文提示

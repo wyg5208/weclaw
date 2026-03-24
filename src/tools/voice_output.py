@@ -106,14 +106,58 @@ class VoiceOutputTool(BaseTool):
         """初始化 Qwen3-TTS 客户端"""
         if not QWEN_TTS_AVAILABLE:
             return False
-        
+            
         try:
             from src.core.qwen_tts_client import QwenTTSClient
             self._qwen_client = QwenTTSClient(preload=True)
             return self._qwen_client.is_available
         except Exception as e:
-            logger.warning(f"Qwen3-TTS 初始化失败: {e}")
+            logger.warning(f"Qwen3-TTS 初始化失败：{e}")
             return False
+    
+    @staticmethod
+    def _preprocess_text(text: str) -> str:
+        """预处理文本，移除无法朗读的字符（标点符号、Emoji、特殊符号）。"""
+        import re
+            
+        # 移除特殊标记
+        text = re.sub(r'<\|.*?\|>', '', text)
+        text = re.sub(r'\[.*?\]', '', text)
+    
+        # 移除所有标点符号（中英文）
+        # 中文标点：，。！？；：、""''``……—～《》【】（）〔〕〈〉「」『』〖〗〘〙〚〛⸨⸩
+        # 英文标点：,.!?;:'"`~…–—·•
+        # 其他符号：@#$%^&*()_+-=[]{}|;':",./<>?\\等
+        punctuation_pattern = re.compile(
+            r'[，。！？；：、""\'\'``……—～《》【】（）〔〕〈〉「」『』〖〗〘〙〚〛⸨⸩'
+            r',.!?;:\'"`…–—·•'
+            r'@#$%^&*()_+\-=\[\]{}|;\':",./<>?\\'
+            r']+', 
+            flags=re.UNICODE
+        )
+        text = punctuation_pattern.sub(' ', text)
+    
+        # 移除 Emoji（只匹配真正的 emoji 范围，避免误删 CJK 字符）
+        # 注意：不要使用大的 Unicode 范围如 \U000024C2-\U0001F251，
+        # 因为它会错误地包含 CJK 汉字范围 (U+4E00-U+9FFF)
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"  # symbols & pictographs
+            "\U0001F680-\U0001F6FF"  # transport & map symbols
+            "\U0001F1E0-\U0001F1FF"  # flags
+            "\U00002702-\U000027B0"   # dingbats
+            "\U000024C2"              # only circled M, not a range
+            "\U0001F251"              # only positive face, not a range
+            "]+", flags=re.UNICODE
+        )
+        text = emoji_pattern.sub('', text)
+    
+        # 清理多余空白（多个空格合并为一个，去除首尾空格）
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+    
+        return text
 
     def get_actions(self) -> list[ActionDef]:
         return [
@@ -208,28 +252,33 @@ class VoiceOutputTool(BaseTool):
         self, text: str, rate: int = 200, volume: float = 1.0, voice: str = "vivian"
     ) -> ToolResult:
         """朗读文本
-        
-        引擎优先级: edge_tts > pyttsx3
+            
+        引擎优先级：edge_tts > pyttsx3
         Qwen3-TTS 不用于实时朗读，仅用于 save_to_file。
         """
         try:
             if not text.strip():
                 return ToolResult(status=ToolResultStatus.ERROR, error="文本内容为空")
-
+    
+            # 预处理文本：移除标点符号和 Emoji
+            cleaned_text = self._preprocess_text(text)
+            if not cleaned_text:
+                return ToolResult(status=ToolResultStatus.ERROR, error="无可朗读内容（已过滤标点和符号）")
+    
             # 实时朗读优先用 Edge TTS，降级用 pyttsx3
             if self._engine == "edge_tts":
-                return await self._speak_edge_tts(text)
+                return await self._speak_edge_tts(cleaned_text)
             elif self._engine == "pyttsx3":
-                return await self._speak_pyttsx3(text, rate, volume, voice)
+                return await self._speak_pyttsx3(cleaned_text, rate, volume, voice)
             elif self._engine == "qwen_tts":
                 # Qwen3-TTS 降级为 pyttsx3 来朗读（不用于实时）
-                return await self._speak_pyttsx3(text, rate, volume, voice)
+                return await self._speak_pyttsx3(cleaned_text, rate, volume, voice)
             else:
-                return await self._speak_pyttsx3(text, rate, volume, voice)
-
+                return await self._speak_pyttsx3(cleaned_text, rate, volume, voice)
+    
         except Exception as e:
-            logger.error("TTS 朗读失败: %s", e)
-            return ToolResult(status=ToolResultStatus.ERROR, error=f"朗读失败: {e}")
+            logger.error("TTS 朗读失败：%s", e)
+            return ToolResult(status=ToolResultStatus.ERROR, error=f"朗读失败：{e}")
 
     async def _speak_edge_tts(self, text: str) -> ToolResult:
         """使用 Edge TTS 朗读（内存处理，无临时文件）。"""

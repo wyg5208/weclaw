@@ -484,10 +484,15 @@ class MainWindow(QMainWindow):
         # 清空输入框
         self._input_edit.clear()
 
-        # 获取附件列表（对话模式通常没有附件）
-        attachments = self._attachment_manager.attachments
+        # 【关键修复】语音对话模式下，只负责 UI 显示，不发射 message_sent。
+        # AI 处理由 voice_message_sent 信号（CFTA 路径）负责，
+        # 避免同一条语音触发两个处理路径导致回复重复。
+        if is_voice_mode:
+            self._set_thinking_state(True)
+            return
 
-        # 发出信号（包含附件信息）
+        # 非语音模式：正常发出信号
+        attachments = self._attachment_manager.attachments
         if attachments:
             self.message_with_attachments.emit(text, attachments)
             self._attachment_manager.clear()
@@ -536,6 +541,13 @@ class MainWindow(QMainWindow):
         if self._conversation_mode == "wake_word" and self._wake_word_detector:
             if self._wake_word_detector.check(text):
                 self.add_tool_log("检测到唤醒词，已激活对话模式")
+                # 自动激活 TTS（如果未激活）
+                if not self._tts_enabled:
+                    logger.info("唤醒词检测：自动激活 TTS")
+                    self._tts_enabled = True
+                    self._tts_btn.setChecked(True)
+                    self._tts_btn.setText("🔊 TTS")
+                    self.tts_toggle_requested.emit(True)
                 self._conversation_mgr.set_mode("continuous")
 
         # 发送到对话管理器
@@ -2294,7 +2306,15 @@ class MainWindow(QMainWindow):
         """处理持续对话模式开关切换。"""
         mode = "continuous" if checked else "off"
         self._conversation_mode = mode
-
+    
+        # 自动激活 TTS（如果未激活）
+        if checked and not self._tts_enabled:
+            logger.info("持续对话模式：自动激活 TTS")
+            self._tts_enabled = True
+            self._tts_btn.setChecked(True)
+            self._tts_btn.setText("🔊 TTS")
+            self.tts_toggle_requested.emit(True)
+    
         # 更新按钮样式
         if checked:
             self._continuous_btn.setStyleSheet(
@@ -2305,11 +2325,11 @@ class MainWindow(QMainWindow):
             self._continuous_btn.setStyleSheet(
                 "font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px;"
             )
-
-        # 调用ConversationManager设置模式
+    
+        # 调用 ConversationManager 设置模式
         if self._conversation_mgr:
             self._conversation_mgr.set_mode(mode)
-
+    
         self._update_conversation_status()
         self.conversation_mode_changed.emit(mode)
 

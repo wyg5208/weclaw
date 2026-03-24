@@ -2,7 +2,7 @@
 
 > 你的随身 AI 桌面管家 - 51+ 工具 + 移动端远程控制
 
-**版本**: v2.21.1
+**版本**: v2.21.2
 **更新日期**: 2026 年 3 月 24 日
 
 Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**身材小巧**（仅 Python 环境即可运行），但**内含 51+ 实用工具**，从文件管理、浏览器自动化到语音交互 OCR 识别样样精通。
@@ -116,6 +116,24 @@ weclaw/
 
 ### 安装
 
+#### 方式 A: PyPI 安装（推荐）
+
+```bash
+# 1. 从 PyPI 安装基础包
+pip install weclawpy
+
+# 2. 补充 GUI 依赖（必须）
+pip install pyside6 qasync keyring simpleaudio numpy
+
+# 3. 补充工具依赖（按需）
+pip install markdown pypdf pptx pandas matplotlib python-docx
+
+# 4. 配置 API Key
+copy .env.example .env  # 然后编辑 .env 填入真实的 API Key
+```
+
+#### 方式 B: 源码安装（开发者）
+
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/wyg5208/WeClaw.git
@@ -133,6 +151,23 @@ pip install -e .           # 核心依赖
 pip install -e ".[gui]"    # GUI 依赖
 pip install -e ".[browser]" # 浏览器自动化
 ```
+
+#### ⚠️ 重要提示：额外依赖
+
+**PyPI 安装后需要手动补充以下依赖才能正常启动和使用：**
+
+```bash
+# GUI 启动必需
+pip install pyside6 qasync keyring simpleaudio numpy
+
+# 文档处理工具（常用）
+pip install markdown pypdf pptx pandas matplotlib python-docx
+
+# 完整功能清单（参考 requirements_20260324.txt）
+pip install -r requirements_20260324.txt
+```
+
+详细说明请参考：[docs/开发记录/PyPI发布清单_weclaw_v2.14.1.md](docs/开发记录/PyPI发布清单_weclaw_v2.14.1.md)
 
 ### 配置
 
@@ -437,7 +472,34 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 ## 版本日志
 
-### 最新版本 (v2.21.1)
+### 最新版本 (v2.21.2)
+
+**发布日期**: 2026-03-24
+
+### Bug修复 🐛
+
+#### 语音对话回复重复修复 🔧
+- ✅ 修复语音持续对话模式下 AI 回复内容重复的严重 Bug
+- ✅ 根因：CFTA 引入后 `_on_speech_recognized` 同时触发 `message_sent` 和 `voice_message_sent` 两条路径
+- ✅ 修复方案：语音模式下 `_on_speech_recognized` 仅负责 UI 显示，不再发射 `message_sent`
+- ✅ 修复英语对话工具 Schema 错误（`"required": true` → `required_params` 列表）
+
+### 功能优化 ✨
+
+#### 英语口语对话增强 📚
+- ✅ 强制纯英语输出：prompt 约束 + `_filter_chinese_content()` 后处理双重保障
+- ✅ 无效语音输入过滤（噪音检测）
+- ✅ 智能退出检测：说"结束对话"等自动退出英语练习
+- ✅ 意图识别新增 20 个英语口语场景关键词
+
+#### TTS 文本预处理优化 🔊
+- ✅ 移除标点符号和 Emoji 后再朗读，避免读出"逗号""句号"
+- ✅ 流式 TTS 降级机制：`speak()` 在流式模式下自动降级为 `enqueue()`
+- ✅ 持续对话模式开启时自动激活 TTS
+
+---
+
+### v2.21.1
 
 **发布日期**: 2026-03-24
 
@@ -448,6 +510,31 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 - ✅ 新建会话时取消正在进行的聊天任务，防止信号残留
 - ✅ Agent.reset() 改为创建新会话而非仅清空消息，旧会话自动保存到历史记录
 - ✅ 新建会话后旧对话自动出现在历史记录 TAB
+
+### 最新版本 (v2.21.0)
+
+**发布日期**: 2026-03-24
+
+### 功能增强 🚀
+
+#### TTS 标点符号和 Emoji 过滤 🔊
+- ✅ TTS 播放时自动跳过所有标点符号（中文、英文、特殊符号）
+- ✅ Emoji 表情自动过滤，不被 TTS 朗读
+- ✅ 特殊标记（如 `<|...|>`、`[...]`）自动移除
+- ✅ 支持全面的 Unicode emoji 范围识别
+- ✅ 预处理延迟 < 10ms，对性能影响可忽略
+
+### 技术改进 🛠️
+- ✅ `tts_player.py` 和 `voice_output.py` 使用相同的预处理逻辑
+- ✅ 正则表达式精确匹配，避免误删 CJK 汉字
+- ✅ 适用于所有 TTS 引擎（pyttsx3、edge-tts、Qwen3-TTS）
+
+### 用户体验提升 ✨
+- ✅ 更自然流畅的语音朗读体验
+- ✅ 避免读出"逗号"、"句号"等标点名称
+- ✅ 避免读出 emoji 描述（如"笑脸"、"苹果"）
+- ✅ 提升英语和中文对话的流畅度
+
 
 ### 最新版本 (v2.20.1)
 
@@ -699,6 +786,15 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 ---
 
+### v2.21.2 (2026-03-24)
+- ✅ 修复语音持续对话模式 AI 回复内容重复的严重 Bug（CFTA 信号链双路径并行）
+- ✅ 修复英语对话工具 Schema 错误（`required_params` 列表修正）
+- ✅ 英语口语增强：纯英语输出、无效输入过滤、智能退出检测
+- ✅ TTS 文本预处理：移除标点/Emoji、流式降级机制
+- ✅ 持续对话模式自动激活 TTS
+
+---
+
 ### v2.21.1 (2026-03-24)
 - ✅ 修复新建会话AI消息残留问题：ChatWidget.clear() 循环条件 `> 1` → `> 0`
 - ✅ 新建会话时取消正在进行的聊天任务，防止信号残留
@@ -925,6 +1021,13 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 - ✅ MCP 工具重复注册警告修复
 - ✅ 全局快捷键异常处理改进
 
+### v2.21.0 (2026-03-24)
+-  TTS 标点符号和 Emoji 过滤功能
+-  全面的中文、英文标点符号过滤
+-  Unicode emoji 范围识别
+-  预处理延迟 < 10ms
+-  适用于所有 TTS 引擎
+
 ### v2.18.0 (2026-03-24)
 - ✅ 高拍仪文档扫描工具开发
 - ✅ GLM-4.6V 视觉模型集成
@@ -987,5 +1090,7 @@ Weclaw 基于 Python 开发，天生具有跨平台能力。虽然主要在 Wind
 让 AI 成为你的效率助手！（Windows/macOS/Linux）
 
 
-**当前版本**: v2.21.1 (2026-03-24)
+**当前版本**: v2.21.2 (2026-03-24)
+
+
 
