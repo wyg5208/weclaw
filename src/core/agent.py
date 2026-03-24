@@ -1818,7 +1818,9 @@ class Agent:
                 dynamic_system_prompt
                 + "\n\n[异步工具模式] 你已经对用户做了快速回复，"
                 "\n现在请判断用户的请求是否需要调用工具来完成。"
-                "\n如果需要工具，请直接调用；如果不需要，请回复 '[CFTA_NO_TOOL]'。"
+                "\n如果需要工具，请直接调用，不要生成任何文本回复；"
+                "\n如果不需要工具，请只回复 '[CFTA_NO_TOOL]'。"
+                "\n重要：不要重复快速回复中已说过的内容。"
             )
 
             # 构建专用的消息列表（不污染主 session）
@@ -1830,7 +1832,8 @@ class Agent:
                     "role": "user",
                     "content": (
                         "请检查上面的对话，判断是否需要调用工具来完成用户的请求。"
-                        "如果需要，请直接调用工具；如果不需要，请回复 '[CFTA_NO_TOOL]'。"
+                        "如果需要，请直接调用工具，不要生成额外文本；"
+                        "如果不需要，请回复 '[CFTA_NO_TOOL]'。"
                     ),
                 },
             ]
@@ -1947,13 +1950,13 @@ class Agent:
             # 构建结果摘要
             summary = "\n".join(result_parts)
 
-            # 将工具执行结果追加到 session 历史
-            # 使用 chat_lock 保护 session 写入
-            async with self.chat_lock:
-                self.session_manager.add_message(
-                    role="assistant",
-                    content=f"[后台任务完成] {summary}",
-                )
+            # 不再将工具结果作为独立的 assistant 消息写入 session，
+            # 避免 session 中出现两条 assistant 消息（快速回复 + 工具结果）导致后续对话重复。
+            # 工具执行信息仅通过 DEFERRED_TOOL_RESULT 事件推送到 UI 工具日志。
+            logger.info(
+                "[CFTA-deferred] 工具结果不写入 session（避免重复）: %s",
+                executed_tools,
+            )
 
             # 发布异步工具结果事件
             await self.event_bus.emit(

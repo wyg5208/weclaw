@@ -600,8 +600,8 @@ class ChatWidget(QWidget):
 
     def clear(self) -> None:
         """清空所有消息。"""
-        # 移除所有消息气泡（保留 stretch）
-        while self._layout.count() > 1:
+        # 移除所有消息气泡（布局中没有 stretch，需要全部清除）
+        while self._layout.count() > 0:
             item = self._layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()

@@ -358,15 +358,23 @@ class GuiAgent(QObject):
             self.error_occurred.emit(str(e))
 
     async def _chat_voice_path3(self, message: str) -> None:
-        """CFTA 路径3: 快速口语确认 + 标准工具流程。"""
-        # 先发送一句快速确认
+        """CFTA 路径3: 快速口语确认 + 标准工具流程。
+
+        将 ack 文本通过 enqueue 加入 TTS 队列，然后直接调用 chat()。
+        chat() 内部会统一管理 streaming_tts 生命周期，
+        确保 ack TTS 和标准回复 TTS 连续播放而不冲突。
+        """
+        # 先发送一句快速确认（显示到聊天区域）
         ack_text = "好的，让我来处理。"
         self.message_started.emit()
         self.message_chunk.emit(ack_text)
 
-        if self._tts_enabled:
-            self.streaming_tts_started.emit()
-            self.tts_stream_requested.emit(ack_text)
+        # ack TTS 通过 enqueue 加入队列，不单独触发 streaming_tts_started
+        # （由后续 chat() 统一管理流式 TTS 状态）
+        if self._tts_enabled and self._window and self._window._tts_player:
+            self._window._tts_player.enqueue(ack_text)
+            if self._window._conversation_mgr:
+                self._window._conversation_mgr.on_tts_start()
 
         # 然后走标准工具流程（复用现有 chat 方法）
         await self.chat(message)
@@ -800,12 +808,15 @@ class WinClawGuiApp:
                 except RuntimeError:
                     pass
         
-        self._gui_agent.message_started.connect(
-            lambda: (
-                safe_set_tool_status("生成中..."),
-                safe_clear_tool_log(),
-            )
-        )
+        def _on_message_started():
+            safe_set_tool_status("生成中...")
+            safe_clear_tool_log()
+            # 新回复开始生成时，中止上一条消息的 TTS 播放（如有）
+            if self._window._tts_player and self._window._tts_player.is_playing:
+                logger.info("新回复开始生成，中止上一条消息的 TTS 播放")
+                self._window._tts_player.stop()
+
+        self._gui_agent.message_started.connect(_on_message_started)
 
         # 消息块信号：直接转发到UI
         self._gui_agent.message_chunk.connect(
@@ -2182,24 +2193,27 @@ class WinClawGuiApp:
         logger.info("陪伴消息已显示: %s", message[:50])
 
     def _on_deferred_tool_result(self, result_summary: str) -> None:
-        """CFTA: 后台工具执行结果显示。"""
+        """CFTA: 后台工具执行结果处理。
+
+        不再作为独立 AI 消息显示到聊天区域（避免与快速回复重复），
+        仅在工具日志面板记录执行结果。
+        不触发 TTS 播放（快速回复已提供语音回答）。
+        """
         if not self._window:
             return
-        # 在聊天区域追加工具结果消息（带特殊标识）
-        display_msg = f"📦 [后台任务完成]\n{result_summary}"
-        self._window.add_ai_message(display_msg)
-        self._window.add_tool_log("✅ 后台工具执行完成")
-        logger.info("[CFTA] 后台工具结果已显示")
+        # 仅在工具日志中记录，不显示为独立的 AI 消息
+        self._window.add_tool_log(f"✅ 后台工具完成: {result_summary[:80]}")
+        logger.info("[CFTA] 后台工具结果已记录到工具日志（不重复显示到聊天区域）")
 
     def _on_activate_cfta(self) -> None:
         """英语对话：自动激活持续对话模式。"""
         if not self._window:
             return
         
-        # 设置持续对话模式
+        # 设置持续对话模式（会自动激活 TTS）
         self._window._conversation_mode_combo.setCurrentIndex(1)  # 0=off, 1=continuous, 2=wake_word
-        self._window.add_tool_log("🎤 英语对话：自动激活持续对话模式")
-        logger.info("英语对话：持续对话模式已激活")
+        self._window.add_tool_log("🎤 英语对话：自动激活持续对话模式 + TTS")
+        logger.info("英语对话：持续对话模式已激活（TTS 自动开启）")
 
     def _on_agent_message_finished(self, full_content: str) -> None:
         """Agent 消息生成完成回调。"""
@@ -2244,7 +2258,8 @@ class WinClawGuiApp:
             return
         
         if self._window._tts_player:
-            # 流式模式：入队而非打断
+            # 流式模式：入队而非打断，并激活流式保护标志
+            self._window._tts_player.is_streaming_active = True
             self._window._tts_player.enqueue(text)
             if self._window._conversation_mgr:
                 self._window._conversation_mgr.on_tts_start()
@@ -2255,6 +2270,9 @@ class WinClawGuiApp:
         """流式 TTS 开始播放，通知 ConversationManager 暂停监听重启。"""
         if self._window and self._window._conversation_mgr:
             self._window._conversation_mgr.set_streaming_tts_active(True)
+        # 激活流式保护标志：流式期间 speak() 降级为 enqueue()
+        if self._window and self._window._tts_player:
+            self._window._tts_player.is_streaming_active = True
 
     def _on_streaming_tts_finished(self) -> None:
         """流式 TTS 生成结束，重置流式状态。
@@ -2267,6 +2285,9 @@ class WinClawGuiApp:
             # 【关键修复】不在此处调用 on_tts_finished()
             # 监听恢复由 TTSPlayer.playback_finished 信号 -> _on_tts_playback_finished() 控制
             # 这样确保 TTS 队列真正播完后才恢复监听，避免新旧对话语音混淆
+        # 重置流式保护标志：允许 speak() 恢复正常行为
+        if self._window and self._window._tts_player:
+            self._window._tts_player.is_streaming_active = False
 
     async def _speak_text(self, text: str) -> None:
         """朗读文本。"""
