@@ -46,6 +46,9 @@ class MusicPlayerController:
             "set_shuffle": [], # 设置随机
         }
         
+        # 迷你播放器显示回调（由主窗口注册）
+        self._show_mini_player_callback: Optional[Callable] = None
+        
         logger.info("MusicPlayerController 已初始化")
     
     def register_callback(self, event: str, callback: Callable) -> None:
@@ -64,7 +67,39 @@ class MusicPlayerController:
         """取消注册播放事件回调。"""
         if event in self._callbacks and callback in self._callbacks[event]:
             self._callbacks[event].remove(callback)
-            logger.debug(f"取消注册播放事件回调: {event}")
+            logger.debug(f"取消注册播放事件回调：{event}")
+        
+    def register_show_mini_player_callback(self, callback: Callable) -> None:
+        """注册迷你播放器显示回调（由主窗口调用）。"""
+        self._show_mini_player_callback = callback
+        logger.info("已注册迷你播放器显示回调")
+        
+    def trigger_show_mini_player(self) -> None:
+        """触发迷你播放器显示（在播放歌曲前自动调用）。"""
+        if self._show_mini_player_callback is not None:
+            try:
+                self._show_mini_player_callback()
+                logger.info("已触发迷你播放器显示")
+            except Exception as e:
+                logger.error(f"触发迷你播放器显示失败：{e}")
+        else:
+            # 回调未注册，说明主窗口可能还没有创建迷你播放器
+            # 尝试通过 MainWindow 的实例来创建
+            logger.warning("迷你播放器显示回调未注册，尝试延迟触发...")
+            # 延迟一下再试一次（给主窗口时间完成初始化）
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(100, self._try_trigger_show_mini_player)
+    
+    def _try_trigger_show_mini_player(self) -> None:
+        """重试触发显示迷你播放器。"""
+        if self._show_mini_player_callback is not None:
+            try:
+                self._show_mini_player_callback()
+                logger.info("延迟触发迷你播放器显示成功")
+            except Exception as e:
+                logger.error(f"延迟触发迷你播放器显示失败：{e}")
+        else:
+            logger.warning("重试后仍未注册迷你播放器显示回调")
     
     def play(self, song: dict[str, Any]) -> None:
         """触发播放事件。"""

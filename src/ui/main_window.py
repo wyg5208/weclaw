@@ -160,8 +160,11 @@ class MainWindow(QMainWindow):
         # 附件管理器
         self._attachment_manager = AttachmentManager(self)
 
-        # 迷你播放器实例
+        # 迷你播放器实例（延迟初始化，在首次需要时创建）
         self._music_player_panel = None
+        
+        # 预初始化迷你播放器（确保工具调用时可以自动显示）
+        QTimer.singleShot(500, self._init_music_player_later)
 
         # 初始化命令处理器
         self._init_command_handler()
@@ -3209,22 +3212,44 @@ class MainWindow(QMainWindow):
 
     # ==================== 迷你播放器 ====================
 
+    def _init_music_player_later(self) -> None:
+        """延迟初始化迷你播放器（应用启动后自动创建）。"""
+        if self._music_player_panel is None:
+            try:
+                logger.info("正在预初始化迷你播放器...")
+                self._create_music_player()
+                # 创建后隐藏，等待工具调用时显示
+                self._music_player_panel.hide()
+                logger.info("迷你播放器预初始化完成")
+            except Exception as e:
+                logger.error(f"预初始化迷你播放器失败：{e}")
+    
     def _on_music_player_toggle(self) -> None:
         """切换迷你播放器显示/隐藏。"""
         if self._music_player_panel is None:
-            # 首次点击时创建播放器
+            # 首次点击时创建并显示播放器
             self._create_music_player()
-        
-        if self._music_player_panel.isVisible():
-            self._music_player_panel.hide()
+            # 创建完成后会自动显示（通过 trigger_show_mini_player）
+            # 这里也确保显示一次
+            if self._music_player_panel:
+                self._music_player_panel.show()
+                self._music_player_panel.raise_()
+                self._music_player_panel.activateWindow()
         else:
-            self._music_player_panel.show()
+            # 已存在则切换显示/隐藏
+            if self._music_player_panel.isVisible():
+                self._music_player_panel.hide()
+            else:
+                self._music_player_panel.show()
+                self._music_player_panel.raise_()
+                self._music_player_panel.activateWindow()
 
     def _create_music_player(self) -> None:
         """创建迷你播放器实例。"""
         try:
             from src.ui.music_player_panel import MiniPlayerPanel
             from src.tools.music_player import MusicPlayerTool
+            from src.tools.music_player_controller import get_player_controller
             
             # 创建音乐工具实例
             music_tool = MusicPlayerTool()
@@ -3237,6 +3262,10 @@ class MainWindow(QMainWindow):
             
             # 连接信号
             self._music_player_panel.closed.connect(self._on_music_player_closed)
+            
+            # 注册到控制器（用于显示迷你播放器）
+            controller = get_player_controller()
+            controller.register_show_mini_player_callback(self._show_music_player)
             
             # 移动到屏幕右下角
             from PySide6.QtWidgets import QApplication
@@ -3270,9 +3299,20 @@ class MainWindow(QMainWindow):
                 self._music_player_panel.deleteLater()
                 logger.info("迷你播放器已关闭")
             except Exception as e:
-                logger.error(f"关闭迷你播放器失败: {e}")
+                logger.error(f"关闭迷你播放器失败：{e}")
             finally:
                 self._music_player_panel = None
+        
+    def _show_music_player(self) -> None:
+        """显示迷你播放器（由工具层调用）。"""
+        if self._music_player_panel is None:
+            self._create_music_player()
+            
+        # 确保播放器显示在最前面
+        self._music_player_panel.show()
+        self._music_player_panel.raise_()
+        self._music_player_panel.activateWindow()
+        logger.debug("迷你播放器已显示")
 
     def _on_music_player_closed(self) -> None:
         """迷你播放器关闭时的回调。"""

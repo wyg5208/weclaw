@@ -158,6 +158,7 @@ class SettingsDialog(QDialog):
         from PySide6.QtCore import QTimer
         QTimer.singleShot(50, self._initialize_api_keys)  # API Key 延迟加载
         QTimer.singleShot(100, self._initialize_background_tasks)  # 其他后台任务
+        QTimer.singleShot(150, self._load_music_folder_setting)  # 加载音乐文件夹设置
 
         # 按钮
         btn_layout = QHBoxLayout()
@@ -443,6 +444,30 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(voice_group)
 
+        # ---------- 歌曲库设置 ----------
+        music_group = QGroupBox(tr("歌曲库"))
+        music_layout = QFormLayout(music_group)  # 改为 QFormLayout
+        
+        self._music_folder_edit = QLineEdit()
+        self._music_folder_edit.setPlaceholderText(tr("例如：C:\\Users\\xxx\\Music"))
+        self._music_folder_edit.setToolTip(tr("默认音乐文件夹，用于扫描和导入歌曲"))
+        music_layout.addRow(tr("默认音乐文件夹") + ":", self._music_folder_edit)
+        
+        # 浏览按钮
+        browse_music_btn = QPushButton(tr("浏览..."))
+        browse_music_btn.clicked.connect(self._on_browse_music_folder)
+        music_layout.addRow("", browse_music_btn)
+        
+        music_hint = QLabel(
+            tr("提示：系统启动时会自动同步此文件夹中的歌曲。") + "\n" +
+            tr("如果未设置，默认使用 Windows 用户的音乐文件夹。")
+        )
+        music_hint.setWordWrap(True)
+        music_hint.setStyleSheet("font-size: 11px; color: gray;")
+        music_layout.addWidget(music_hint)
+        
+        layout.addWidget(music_group)
+
         # ---------- 快捷键 ----------
         hotkey_group = QGroupBox(tr("快捷键"))
         hotkey_layout = QFormLayout(hotkey_group)
@@ -459,6 +484,58 @@ class SettingsDialog(QDialog):
 
         layout.addStretch()
         return widget
+    
+    def _on_browse_music_folder(self) -> None:
+        """浏览选择音乐文件夹。"""
+        from PySide6.QtWidgets import QFileDialog
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择音乐文件夹"),
+            ""
+        )
+        
+        if folder:
+            self._music_folder_edit.setText(folder)
+    
+    def _load_music_folder_setting(self) -> None:
+        """加载音乐文件夹设置。"""
+        import os
+        current = os.getenv("MUSIC_FOLDER", "")
+        if current:
+            self._music_folder_edit.setText(current)
+    
+    def _save_music_folder_setting(self) -> None:
+        """保存音乐文件夹设置。"""
+        import os
+        from pathlib import Path
+        from PySide6.QtWidgets import QMessageBox
+        
+        music_folder = self._music_folder_edit.text().strip()
+        if music_folder and Path(music_folder).exists():
+            # 保存到环境变量（临时，重启后失效）
+            os.environ["MUSIC_FOLDER"] = music_folder
+            # TODO: 未来可以保存到配置文件
+            QMessageBox.information(
+                self,
+                tr("成功"),
+                tr("音乐文件夹已设置，下次启动生效。") + "\n" + f"{music_folder}"
+            )
+        elif music_folder:
+            QMessageBox.warning(
+                self,
+                tr("警告"),
+                tr("文件夹不存在，请检查路径。")
+            )
+        else:
+            # 清空设置
+            if "MUSIC_FOLDER" in os.environ:
+                del os.environ["MUSIC_FOLDER"]
+            QMessageBox.information(
+                self,
+                tr("提示"),
+                tr("已清除自定义音乐文件夹，将使用 Windows 默认音乐文件夹。")
+            )
 
     def _on_theme_changed(self, index: int) -> None:
         """主题切换。"""

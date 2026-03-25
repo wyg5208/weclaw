@@ -16,8 +16,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Any
 
-from PySide6.QtCore import Qt, Signal, QTimer, QUrl, QSize
-from PySide6.QtGui import QFont, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, Signal, QTimer, QUrl, QSize, QPoint
+from PySide6.QtGui import QFont, QIcon, QKeySequence, QShortcut, QAction, QCursor
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtWidgets import (
     QFrame,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QSizePolicy,
     QLineEdit,
+    QMenu,
 )
 
 if TYPE_CHECKING:
@@ -48,10 +49,10 @@ class MiniPlayerPanel(QFrame):
     volume_changed = Signal(float)  # 音量变化
     closed = Signal()  # 窗口关闭
 
-    # 窗口尺寸
-    MINI_SIZE = (320, 80)
-    EXPANDED_SIZE = (420, 380)
-
+    # 窗口尺寸 - 只有两种模式
+    MINI_SIZE = (320, 100)      # 迷你模式：显示当前歌曲 + 控制按钮 + 进度条
+    EXPANDED_SIZE = (450, 400)  # 展开模式：完整播放列表 + 管理功能
+    
     def __init__(
         self,
         music_tool: Optional[MusicPlayerTool] = None,
@@ -60,7 +61,7 @@ class MiniPlayerPanel(QFrame):
         super().__init__(parent)
         
         self._music_tool = music_tool
-        self._is_expanded = False
+        self._is_expanded = False  # False=迷你模式，True=展开模式
         self._dragging = False
         self._drag_pos = None
         self._ducking = False
@@ -84,7 +85,7 @@ class MiniPlayerPanel(QFrame):
         self._update_timer = QTimer(self)
         self._update_timer.setInterval(500)  # 500ms 更新一次进度
         self._update_timer.timeout.connect(self._update_progress)
-
+    
     def _setup_window(self) -> None:
         """设置窗口属性。"""
         self.setWindowFlags(
@@ -93,10 +94,8 @@ class MiniPlayerPanel(QFrame):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        # 迷你模式：宽度固定，高度根据内容自适应
-        self.setMinimumWidth(self.MINI_SIZE[0])
-        self.setMaximumWidth(500)
-        self.setMinimumHeight(60)
+        # 固定尺寸，避免拖拽时变形
+        self.setFixedSize(*self.MINI_SIZE)
         self.setMaximumHeight(600)
         self.resize(*self.MINI_SIZE)
         self.setObjectName("miniPlayerPanel")
@@ -204,6 +203,12 @@ class MiniPlayerPanel(QFrame):
         self._title_label.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Bold))
         title_layout.addWidget(self._title_label)
         
+        # 歌曲数量标签
+        self._count_label = QLabel("(0)")
+        self._count_label.setFont(QFont("Microsoft YaHei", 9))
+        self._count_label.setStyleSheet("color: #888; padding: 0 4px;")
+        title_layout.addWidget(self._count_label)
+        
         title_layout.addStretch()
         
         # 模式切换按钮
@@ -217,7 +222,7 @@ class MiniPlayerPanel(QFrame):
         self._close_btn = QPushButton("×")
         self._close_btn.setFixedSize(24, 24)
         self._close_btn.setToolTip("关闭")
-        self._close_btn.clicked.connect(self._on_close)
+        self._close_btn.clicked.connect(self.close)
         title_layout.addWidget(self._close_btn)
         
         self._main_layout.addWidget(self._title_bar)
@@ -286,6 +291,31 @@ class MiniPlayerPanel(QFrame):
         expanded_layout.setContentsMargins(0, 4, 0, 0)
         expanded_layout.setSpacing(6)
         
+        # === 管理工具栏 ===
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(4)
+        
+        # 添加歌曲按钮
+        self._add_song_btn = QPushButton("➕ 添加")
+        self._add_song_btn.setToolTip("添加本地歌曲文件")
+        self._add_song_btn.clicked.connect(self._on_add_songs_clicked)
+        toolbar_layout.addWidget(self._add_song_btn)
+        
+        # 扫描文件夹按钮
+        self._scan_folder_btn = QPushButton("📁 扫描")
+        self._scan_folder_btn.setToolTip("扫描文件夹中的歌曲")
+        self._scan_folder_btn.clicked.connect(self._on_scan_folder_clicked)
+        toolbar_layout.addWidget(self._scan_folder_btn)
+        
+        # 刷新按钮
+        self._refresh_btn = QPushButton("🔄 刷新")
+        self._refresh_btn.setToolTip("刷新歌曲列表")
+        self._refresh_btn.clicked.connect(self._on_refresh_clicked)
+        toolbar_layout.addWidget(self._refresh_btn)
+        
+        toolbar_layout.addStretch()
+        expanded_layout.addLayout(toolbar_layout)
+        
         # 搜索框
         self._search_input = QLineEdit()
         self._search_input.setPlaceholderText("搜索歌曲或标签...")
@@ -295,6 +325,9 @@ class MiniPlayerPanel(QFrame):
         # 播放列表
         self._playlist_widget = QListWidget()
         self._playlist_widget.itemDoubleClicked.connect(self._on_playlist_item_double_clicked)
+        # 设置右键菜单
+        self._playlist_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._playlist_widget.customContextMenuRequested.connect(self._show_playlist_context_menu)
         expanded_layout.addWidget(self._playlist_widget)
         
         self._expanded_widget.setVisible(False)
@@ -654,15 +687,220 @@ class MiniPlayerPanel(QFrame):
         for i, song in enumerate(self._playlist):
             title = song.get("title", "未知")
             artist = song.get("artist", "未知艺术家")
-            item = QListWidgetItem(f"{title} - {artist}")
+            # 显示序号（+1因为从1开始计数）
+            item = QListWidgetItem(f"{i + 1:2d}. {title} - {artist}")
             item.setData(Qt.ItemDataRole.UserRole, song.get("id"))
             self._playlist_widget.addItem(item)
+        
+        # 更新数量标签
+        self._count_label.setText(f"({len(self._playlist)})")
         
         self._highlight_current_song()
 
     def _highlight_current_song(self) -> None:
         """高亮当前播放的歌曲。"""
         self._playlist_widget.setCurrentRow(self._current_index)
+
+    def _show_playlist_context_menu(self, pos: QPoint) -> None:
+        """显示播放列表右键菜单。"""
+        item = self._playlist_widget.itemAt(pos)
+        if item is None:
+            return
+        
+        row = self._playlist_widget.row(item)
+        if row < 0 or row >= len(self._playlist):
+            return
+        
+        menu = QMenu(self)
+        
+        # 置顶
+        top_action = QAction("🔝 置顶", self)
+        top_action.triggered.connect(lambda: self._move_song_to_top(row))
+        menu.addAction(top_action)
+        
+        # 置底
+        bottom_action = QAction("🔻 置底", self)
+        bottom_action.triggered.connect(lambda: self._move_song_to_bottom(row))
+        menu.addAction(bottom_action)
+        
+        menu.addSeparator()
+        
+        # 单曲循环
+        loop_action = QAction("🔂 单曲循环", self)
+        loop_action.triggered.connect(lambda: self._set_single_loop(row))
+        menu.addAction(loop_action)
+        
+        menu.addSeparator()
+        
+        # 删除
+        delete_action = QAction("🗑️ 删除", self)
+        delete_action.triggered.connect(lambda: self._delete_song_from_playlist(row))
+        menu.addAction(delete_action)
+        
+        menu.exec(QCursor.pos())
+
+    def _move_song_to_top(self, row: int) -> None:
+        """将歌曲置顶。"""
+        if row <= 0 or row >= len(self._playlist):
+            return
+        song = self._playlist.pop(row)
+        self._playlist.insert(0, song)
+        # 如果移动的是当前歌曲之前的，调整索引
+        if row < self._current_index:
+            self._current_index += 1
+        elif row == self._current_index:
+            self._current_index = 0
+        self._refresh_playlist()
+
+    def _move_song_to_bottom(self, row: int) -> None:
+        """将歌曲置底。"""
+        if row < 0 or row >= len(self._playlist) - 1:
+            return
+        song = self._playlist.pop(row)
+        self._playlist.append(song)
+        # 如果移动的是当前歌曲之后的，调整索引
+        if row > self._current_index:
+            self._current_index -= 1
+        elif row == self._current_index:
+            self._current_index = len(self._playlist) - 1
+        self._refresh_playlist()
+
+    def _set_single_loop(self, row: int) -> None:
+        """设置单曲循环并播放。"""
+        if row < 0 or row >= len(self._playlist):
+            return
+        # 设置循环模式为单曲
+        if self._music_tool:
+            settings = self._music_tool.get_library_data().setdefault("settings", {})
+            settings["loop_mode"] = "single"
+            self._update_loop_button()
+        # 切换到该歌曲并播放
+        self._current_index = row
+        self.play_song(self._playlist[row])
+        self._refresh_playlist()
+
+    def _delete_song_from_playlist(self, row: int) -> None:
+        """从播放列表删除歌曲（不从歌曲库删除）。"""
+        if row < 0 or row >= len(self._playlist):
+            return
+        
+        song = self._playlist[row]
+        
+        # 如果删除的是当前歌曲，先停止播放
+        if row == self._current_index:
+            self._player.stop()
+            self._song_info.setText("未播放")
+            self._progress_slider.setValue(0)
+            self._time_label.setText("0:00/0:00")
+        
+        # 从列表中移除
+        self._playlist.pop(row)
+        
+        # 调整当前索引
+        if row < self._current_index:
+            self._current_index -= 1
+        elif row == self._current_index and self._current_index >= len(self._playlist):
+            self._current_index = max(0, len(self._playlist) - 1)
+        
+        self._refresh_playlist()
+
+    # ==================== 歌曲管理 ====================
+
+    def _on_add_songs_clicked(self) -> None:
+        """添加歌曲按钮点击。"""
+        if not self._music_tool:
+            return
+        
+        from PySide6.QtWidgets import QFileDialog
+        # 选择多个文件
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择歌曲文件",
+            "",
+            "音频文件 (*.mp3 *.wav *.flac *.m4a *.ogg);;所有文件 (*)"
+        )
+        
+        if files:
+            logger.info(f"用户选择了 {len(files)} 个文件")
+            # 调用工具添加歌曲
+            import asyncio
+            from src.tools.music_player_controller import get_player_controller
+            
+            # 异步执行添加操作
+            async def add_files():
+                result = await self._music_tool.execute("add_songs", {
+                    "paths": files,
+                    "copy_to_library": True
+                })
+                if result.status == "success":
+                    logger.info(f"添加成功：{result.output}")
+                    # 刷新列表
+                    self._on_refresh_clicked()
+                else:
+                    logger.error(f"添加失败：{result.error}")
+            
+            # 使用 QTimer 在主线程执行
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: asyncio.ensure_future(add_files()))
+
+    def _on_scan_folder_clicked(self) -> None:
+        """扫描文件夹按钮点击。"""
+        if not self._music_tool:
+            return
+        
+        from PySide6.QtWidgets import QFileDialog
+        # 选择文件夹
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "选择音乐文件夹",
+            ""
+        )
+        
+        if folder:
+            logger.info(f"用户选择了文件夹：{folder}")
+            # 调用工具扫描
+            import asyncio
+            from src.tools.music_player_controller import get_player_controller
+            
+            async def scan_folder():
+                result = await self._music_tool.execute("scan_local_music", {
+                    "directory": folder,
+                    "recursive": True,
+                    "max_results": 100
+                })
+                if result.status == "success":
+                    logger.info(f"扫描成功：{result.output}")
+                    # 刷新列表
+                    self._on_refresh_clicked()
+                else:
+                    logger.error(f"扫描失败：{result.error}")
+            
+            # 使用 QTimer 在主线程执行
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: asyncio.ensure_future(scan_folder()))
+
+    def _on_refresh_clicked(self) -> None:
+        """刷新按钮点击。"""
+        logger.info("用户手动刷新歌曲列表")
+        if self._music_tool:
+            # 重新加载歌曲库数据
+            library_data = self._music_tool.get_library_data()
+            songs = library_data.get("songs", {})
+            if songs:
+                self._playlist = list(songs.values())
+                self._current_index = 0
+                
+                # 恢复上次播放的歌曲
+                state = library_data.get("current_state", {})
+                last_id = state.get("last_played_id")
+                if last_id and last_id in songs:
+                    for i, song in enumerate(self._playlist):
+                        if song.get("id") == last_id:
+                            self._current_index = i
+                            break
+            
+            # 刷新显示
+            self._refresh_playlist()
 
     # ==================== 搜索 ====================
 
@@ -700,23 +938,30 @@ class MiniPlayerPanel(QFrame):
     # ==================== 模式切换 ====================
 
     def _toggle_mode(self) -> None:
-        """切换迷你/展开模式。"""
+        """切换迷你/展开模式（只有两种尺寸）。"""
         self._is_expanded = not self._is_expanded
         
         if self._is_expanded:
+            # 展开模式：显示完整播放列表
             self.setFixedSize(*self.EXPANDED_SIZE)
             self._expanded_widget.setVisible(True)
             self._expand_btn.setText("−")
+            self._expand_btn.setToolTip("收起播放列表")
             
             # 刷新播放列表
             if self._music_tool:
                 songs = self._music_tool.get_library_data().get("songs", {})
                 self._playlist = list(songs.values())
                 self._refresh_playlist()
+                self._highlight_current_song()
         else:
+            # 迷你模式：只显示当前歌曲和控制按钮
             self.setFixedSize(*self.MINI_SIZE)
             self._expanded_widget.setVisible(False)
             self._expand_btn.setText("≡")
+            self._expand_btn.setToolTip("展开播放列表")
+        
+        logger.info(f"播放器模式切换：{'展开' if self._is_expanded else '迷你'} ({self.width()}x{self.height()})")
 
     # ==================== 窗口拖拽 ====================
 
@@ -790,6 +1035,9 @@ class MiniPlayerPanel(QFrame):
                     if song.get("id") == last_id:
                         self._current_index = i
                         break
+        
+        # 刷新播放列表显示
+        self._refresh_playlist()
 
     def get_current_song(self) -> dict | None:
         """获取当前播放的歌曲。"""
@@ -803,15 +1051,14 @@ class MiniPlayerPanel(QFrame):
 
     def _on_close(self) -> None:
         """关闭窗口。"""
-        # 停止定时器，防止关闭后继续触发回调
+        logger.info("正在关闭迷你播放器...")
+        
+        # 先停止定时器，防止关闭后继续触发回调
         if hasattr(self, '_update_timer') and self._update_timer:
             self._update_timer.stop()
+            logger.debug("已停止更新定时器")
         
-        # 停止播放器
-        if self._player:
-            self._player.stop()
-        
-        # 取消注册控制器回调
+        # 断开所有控制器回调连接，防止在关闭过程中被触发
         try:
             from src.tools.music_player_controller import get_player_controller
             controller = get_player_controller()
@@ -825,14 +1072,35 @@ class MiniPlayerPanel(QFrame):
             controller.unregister_callback("set_volume", self._on_controller_set_volume)
             controller.unregister_callback("set_loop", self._on_controller_set_loop)
             controller.unregister_callback("set_shuffle", self._on_controller_set_shuffle)
-        except Exception:
-            pass
+            logger.debug("已取消注册所有控制器回调")
+        except Exception as e:
+            logger.error(f"取消注册控制器回调失败：{e}")
         
-        self.hide()
+        # 停止播放器
+        if self._player:
+            self._player.stop()
+            self._player.setSource(QUrl())  # 清空音源
+            logger.debug("已停止播放器并清空音源")
+        
+        # 更新 UI 显示
+        self._song_info.setText("未播放")
+        self._progress_slider.setValue(0)
+        self._time_label.setText("0:00/0:00")
+        
+        # 关闭窗口
+        self.close()
+        
+        # 发出关闭信号
         self.closed.emit()
+        
+        logger.info("迷你播放器已关闭")
 
     def closeEvent(self, event) -> None:
         """窗口关闭事件。"""
-        self._on_close()
+        logger.debug("收到 closeEvent")
+        # 如果已经调用了 _on_close，就直接接受事件
+        if self._player and self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            logger.warning("播放器仍在播放，强制停止")
+            self._player.stop()
         event.accept()
 

@@ -96,6 +96,9 @@ class MusicPlayerTool(BaseTool):
         self._library_dir.mkdir(parents=True, exist_ok=True)
         self._music_dir.mkdir(parents=True, exist_ok=True)
         
+        # 加载默认音乐文件夹（从.env 或系统默认）
+        self._default_music_folder = self._get_default_music_folder()
+        
         # 加载歌曲库数据
         self._library_data = self._load_library()
         
@@ -111,7 +114,36 @@ class MusicPlayerTool(BaseTool):
         # 获取播放器控制器
         self._controller = get_player_controller()
         
-        logger.info(f"MusicPlayerTool 初始化完成，歌曲库路径: {self._library_dir}")
+        logger.info(f"MusicPlayerTool 初始化完成，歌曲库路径：{self._library_dir}")
+        
+    def _get_default_music_folder(self) -> Path:
+        """获取默认音乐文件夹。
+            
+        优先级：
+        1. .env 中的 MUSIC_FOLDER 环境变量
+        2. Windows 用户音乐文件夹 (C:\\Users\\xxx\\Music)
+        3. 当前目录下的 music 文件夹
+        """
+        import os
+            
+        # 尝试从环境变量读取
+        env_music_folder = os.getenv("MUSIC_FOLDER")
+        if env_music_folder and Path(env_music_folder).exists():
+            logger.info(f"使用环境变量中的音乐文件夹：{env_music_folder}")
+            return Path(env_music_folder)
+            
+        # 使用 Windows 用户音乐文件夹
+        try:
+            user_music = Path.home() / "Music"
+            if user_music.exists():
+                logger.info(f"使用 Windows 用户音乐文件夹：{user_music}")
+                return user_music
+        except Exception:
+            pass
+            
+        # 回退到当前目录
+        logger.info("使用默认音乐文件夹：./music")
+        return Path("./music")
 
     def _load_library(self) -> dict[str, Any]:
         """加载歌曲库数据。"""
@@ -578,6 +610,13 @@ class MusicPlayerTool(BaseTool):
                 },
                 required_params=[],
             ),
+            # === 窗体控制 ===
+            ActionDef(
+                name="close_mini_player",
+                description="关闭迷你播放器窗体并彻底停止播放。",
+                parameters={},
+                required_params=[],
+            ),
         ]
 
     async def execute(self, action: str, params: dict[str, Any]) -> ToolResult:
@@ -646,6 +685,10 @@ class MusicPlayerTool(BaseTool):
                 return await self._get_player_settings(params)
             elif action == "set_player_settings":
                 return await self._set_player_settings(params)
+            
+            # 窗体控制
+            elif action == "close_mini_player":
+                return await self._close_mini_player(params)
             
             else:
                 return ToolResult(
@@ -807,8 +850,14 @@ class MusicPlayerTool(BaseTool):
             except PermissionError:
                 continue
         
-        # 去重并限制数量
-        found_files = list(set(found_files))[:max_results]
+        # 去重并限制数量（保持顺序）
+        seen = set()
+        unique_files = []
+        for f in found_files:
+            if f not in seen:
+                seen.add(f)
+                unique_files.append(f)
+        found_files = unique_files[:max_results]
         
         if not found_files:
             return ToolResult(
@@ -990,7 +1039,13 @@ class MusicPlayerTool(BaseTool):
     # 通过播放器控制器通知 UI 层执行实际播放
 
     async def _play_song(self, params: dict[str, Any]) -> ToolResult:
-        """播放歌曲。"""
+        """播放歌曲。
+        
+        优化搜索逻辑：
+        1. 优先精确匹配（完整标题）
+        2. 其次模糊匹配（包含关键词）
+        3. 使用智能排序选择最佳匹配
+        """
         song_id = params.get("song_id")
         title = params.get("title")
         artist = params.get("artist")
@@ -1010,28 +1065,24 @@ class MusicPlayerTool(BaseTool):
                 if sid in self._library_data["songs"]
             ]
         
-        # 查找目标歌曲
+        # 查找目标歌曲 - 优先级从高到低
         if song_id and song_id in self._library_data["songs"]:
+            # 1. 精确 ID 匹配（最高优先级）
             target_song = self._library_data["songs"][song_id]
-        elif title or artist:
-            # 模糊搜索
-            for song in self._library_data["songs"].values():
-                match = True
-                if title and title.lower() not in song.get("title", "").lower():
-                    match = False
-                if artist and artist.lower() not in song.get("artist", "").lower():
-                    match = False
-                if match:
-                    target_song = song
-                    break
+            
+        elif title:
+            # 2. 智能标题匹配
+            target_song = self._find_best_match(title, artist)
+            
         elif tags:
-            # 按标签搜索
+            # 3. 按标签搜索
             for song in self._library_data["songs"].values():
                 if any(tag in song.get("tags", []) for tag in tags):
                     target_song = song
                     break
+        
         elif playlist_songs:
-            # 播放列表第一首
+            # 4. 播放列表第一首
             target_song = playlist_songs[0]
         
         if not target_song:
@@ -1062,14 +1113,16 @@ class MusicPlayerTool(BaseTool):
         
         self._save_library()
         
+        # 触发显示迷你播放器
+        self._controller.trigger_show_mini_player()
+        
         # 通过控制器通知 UI 层播放
         self._controller.play(target_song)
         if volume is not None:
             self._controller.set_volume(volume)
         
-        # 构建输出
-        tags_str = " | ".join(target_song.get("tags", [])) or "无标签"
-        output = f"正在播放：{target_song['title']} - {target_song['artist']}\n标签：{tags_str}"
+        # 简洁输出，不废话
+        output = f"🎵 {target_song['title']} - {target_song['artist']}"
         
         return ToolResult(
             status=ToolResultStatus.SUCCESS,
@@ -1081,6 +1134,100 @@ class MusicPlayerTool(BaseTool):
                 "volume": self._player_state["volume"],
             },
         )
+    
+    def _find_best_match(self, title: str, artist: str = None) -> dict | None:
+        """智能查找最佳匹配的歌曲。
+        
+        匹配策略：
+        1. 完全匹配（忽略大小写和空格）
+        2. 包含匹配 + 关键词权重排序
+        3. 拼音/简写匹配（未来扩展）
+        
+        Args:
+            title: 歌曲标题
+            artist: 艺术家（可选）
+            
+        Returns:
+            最佳匹配的歌曲字典，无匹配返回 None
+        """
+        if not title:
+            return None
+        
+        songs = list(self._library_data["songs"].values())
+        matches = []
+        
+        # 标准化输入
+        title_normalized = self._normalize_text(title)
+        artist_normalized = self._normalize_text(artist) if artist else ""
+        
+        for song in songs:
+            song_title = song.get("title", "")
+            song_artist = song.get("artist", "")
+            
+            # 标准化歌曲文本
+            song_title_normalized = self._normalize_text(song_title)
+            song_artist_normalized = self._normalize_text(song_artist)
+            
+            score = 0
+            
+            # 1. 完全匹配（最高分）
+            if title_normalized == song_title_normalized:
+                score += 100
+                # 如果艺术家也匹配，加分
+                if artist_normalized and artist_normalized == song_artist_normalized:
+                    score += 50
+            
+            # 2. 包含匹配
+            elif title_normalized in song_title_normalized:
+                score += 50
+                # 完全包含且位置靠前，加分
+                if song_title_normalized.startswith(title_normalized):
+                    score += 20
+            
+            # 3. 关键词匹配（按空格分割）
+            else:
+                title_keywords = title_normalized.replace("(", " ").replace(")", " ").split()
+                match_count = sum(1 for kw in title_keywords if kw in song_title_normalized)
+                if match_count > 0:
+                    score += match_count * 10
+            
+            # 艺术家匹配加分
+            if artist_normalized and artist_normalized in song_artist_normalized:
+                score += 30
+            
+            # 只保留有匹配的
+            if score > 0:
+                matches.append((score, song))
+        
+        if not matches:
+            return None
+        
+        # 按分数排序，返回最佳匹配
+        matches.sort(key=lambda x: x[0], reverse=True)
+        best_match = matches[0][1]
+        
+        logger.debug(f"找到最佳匹配：'{best_match['title']}' (分数：{matches[0][0]})")
+        return best_match
+    
+    def _normalize_text(self, text: str) -> str:
+        """标准化文本：转小写、去空格、统一标点。
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            标准化后的文本
+        """
+        import re
+        # 转小写
+        text = text.lower()
+        # 去前后空格
+        text = text.strip()
+        # 统一括号（中文括号转英文）
+        text = text.replace("（", "(").replace("）", ")")
+        # 去除多余空格
+        text = re.sub(r'\s+', ' ', text)
+        return text
 
     async def _pause_song(self, params: dict[str, Any]) -> ToolResult:
         """暂停播放。"""
@@ -1134,6 +1281,47 @@ class MusicPlayerTool(BaseTool):
             output="已停止播放",
             data={"action": "stop"},
         )
+
+    async def _close_mini_player(self, params: dict[str, Any]) -> ToolResult:
+        """关闭迷你播放器窗体并彻底停止播放。
+        
+        借鉴 MiniPlayerPanel._on_close() 的逻辑：
+        1. 停止定时器
+        2. 断开所有控制器回调
+        3. 停止播放器并清空音源
+        4. 关闭窗口
+        """
+        try:
+            logger.info("正在关闭迷你播放器窗体...")
+            
+            # 通过控制器触发 UI 层的关闭逻辑
+            # 这里需要特殊处理：直接调用主窗口的关闭方法
+            from src.ui.main_window import MainWindow
+            from PySide6.QtWidgets import QApplication
+            
+            # 获取主窗口实例
+            app = QApplication.instance()
+            if app:
+                for widget in app.topLevelWidgets():
+                    if isinstance(widget, MainWindow) and hasattr(widget, '_music_player_panel'):
+                        if widget._music_player_panel is not None:
+                            # 调用 UI 层的关闭方法（这是最可靠的方式）
+                            widget._music_player_panel._on_close()
+                            logger.info("已通过主窗口关闭迷你播放器")
+                            break
+            
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output="迷你播放器已关闭",
+                data={"action": "close_mini_player"},
+            )
+            
+        except Exception as e:
+            logger.error(f"关闭迷你播放器失败：{e}")
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"关闭失败：{str(e)}",
+            )
 
     async def _next_song(self, params: dict[str, Any]) -> ToolResult:
         """下一首。"""
