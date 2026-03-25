@@ -1049,6 +1049,25 @@
       },
       "actions": ["create_menu", "query_menu", "add_dish", "edit_dish", "delete_dish", "parse_image", "list_menus"]
     },
+    "family_milestone": {
+      "enabled": true,
+      "module": "src.tools.family_milestone",
+      "class": "FamilyMilestoneTool",
+      "display": {
+        "name": "家庭大事记",
+        "emoji": "🎊",
+        "description": "记录家庭重大事件、纪念日、议程，支持多种展示模板",
+        "category": "life"
+      },
+      "config": {
+        "db_path": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["create_milestone", "query_milestones", "update_milestone", "delete_milestone", "get_timeline", "get_upcoming", "get_statistics", "export_timeline"]
+    },
     "english_conversation": {
       "enabled": true,
       "module": "src.tools.english_conversation",
@@ -1096,6 +1115,52 @@
         "create_tag", "add_tag", "remove_tag",
         "create_playlist", "add_to_playlist", "remove_from_playlist",
         "get_player_settings", "set_player_settings"
+      ]
+    },
+    "todo": {
+      "enabled": true,
+      "module": "src.tools.todo",
+      "class": "TodoTool",
+      "display": {
+        "name": "待办事项",
+        "emoji": "📋",
+        "description": "管理短期、中期、远期所有任务事项，支持任务分解、优先级管理、关联家庭成员",
+        "category": "productivity"
+      },
+      "config": {
+        "db_path": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": [
+        "create_todo", "update_todo", "delete_todo", "get_todo", "list_todos",
+        "complete_todo", "cancel_todo", "decompose_todo",
+        "get_overdue_todos", "get_upcoming_todos"
+      ]
+    },
+    "daily_task": {
+      "enabled": true,
+      "module": "src.tools.daily_task",
+      "class": "DailyTaskTool",
+      "display": {
+        "name": "每日任务",
+        "emoji": "📅",
+        "description": "管理每日任务清单，支持从待办事项提取、智能推荐、状态跟踪",
+        "category": "productivity"
+      },
+      "config": {
+        "db_path": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": [
+        "add_daily_task", "update_daily_task", "remove_daily_task", "get_daily_tasks",
+        "start_task", "complete_task", "cancel_task",
+        "get_today_summary", "generate_recommendations", "accept_recommendations"
       ]
     }
   },

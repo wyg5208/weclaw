@@ -96,7 +96,6 @@ class MiniPlayerPanel(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         # 固定尺寸，避免拖拽时变形
         self.setFixedSize(*self.MINI_SIZE)
-        self.setMaximumHeight(600)
         self.resize(*self.MINI_SIZE)
         self.setObjectName("miniPlayerPanel")
         
@@ -943,8 +942,9 @@ class MiniPlayerPanel(QFrame):
         
         if self._is_expanded:
             # 展开模式：显示完整播放列表
-            self.setFixedSize(*self.EXPANDED_SIZE)
             self._expanded_widget.setVisible(True)
+            self._progress_slider.setVisible(True)
+            self.setFixedSize(*self.EXPANDED_SIZE)
             self._expand_btn.setText("−")
             self._expand_btn.setToolTip("收起播放列表")
             
@@ -955,9 +955,10 @@ class MiniPlayerPanel(QFrame):
                 self._refresh_playlist()
                 self._highlight_current_song()
         else:
-            # 迷你模式：只显示当前歌曲和控制按钮
+            # 迷你模式：先隐藏展开内容，再调整窗口大小
+            self._expanded_widget.hide()
+            self._progress_slider.hide()
             self.setFixedSize(*self.MINI_SIZE)
-            self._expanded_widget.setVisible(False)
             self._expand_btn.setText("≡")
             self._expand_btn.setToolTip("展开播放列表")
         

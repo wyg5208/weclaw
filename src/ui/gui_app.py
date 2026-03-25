@@ -456,6 +456,9 @@ class WinClawGuiApp:
         # 懒加载标志
         self._gen_space_loaded = False
 
+        # 每日任务调度器
+        self._daily_task_scheduler = None
+
     @staticmethod
     def _load_dotenv() -> None:
         """加载 .env 文件到环境变量（不覆盖已有值）。
@@ -566,6 +569,18 @@ class WinClawGuiApp:
         # 预加载历史会话列表（同步快速读取，不阻塞 UI）
         self._preload_history_sessions()
 
+        # 检查是否需要推送每日任务（早上6-10点之间首次打开时推送）
+        if self._daily_task_scheduler and self._bridge and self._bridge._loop:
+            try:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(
+                    self._daily_task_scheduler.check_and_push_on_startup(),
+                    self._bridge._loop
+                )
+                logger.debug("每日任务启动检查任务已提交")
+            except Exception as e:
+                logger.warning(f"每日任务启动检查失败: {e}")
+
         # 首次启动引导
         if needs_setup():
             self._open_settings()
@@ -660,6 +675,27 @@ class WinClawGuiApp:
                 logger.info("CompanionEngine 调度器启动任务已提交")
         except Exception as e:
             logger.warning(f"CompanionEngine 初始化失败: {e}")
+
+        # 初始化每日任务调度器（在 CompanionEngine 之后）
+        self._daily_task_scheduler = None
+        try:
+            from src.core.daily_task_scheduler import DailyTaskScheduler
+            self._daily_task_scheduler = DailyTaskScheduler(
+                event_bus=self._agent.event_bus,
+                companion_engine=self._companion_engine,
+            )
+            logger.info("DailyTaskScheduler 初始化成功")
+
+            # 启动每日任务调度器（凌晨分析、早上推送）
+            if self._bridge and self._bridge._loop:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(
+                    self._daily_task_scheduler.start(),
+                    self._bridge._loop
+                )
+                logger.info("DailyTaskScheduler 调度器启动任务已提交")
+        except Exception as e:
+            logger.warning(f"DailyTaskScheduler 初始化失败: {e}")
 
         # 创建 GUI Agent 包装器
         self._gui_agent = GuiAgent(self._agent, self._model_registry)
@@ -1395,6 +1431,22 @@ class WinClawGuiApp:
 
     def _cleanup(self) -> None:
         """清理资源。"""
+        # 停止每日任务调度器
+        if self._daily_task_scheduler:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        self._daily_task_scheduler.stop(),
+                        loop
+                    ).result(timeout=5)
+                else:
+                    loop.run_until_complete(self._daily_task_scheduler.stop())
+                logger.info("DailyTaskScheduler 已停止")
+            except Exception as e:
+                logger.warning(f"停止每日任务调度器失败: {e}")
+
         # 停止陪伴调度器
         if self._companion_engine:
             try:
@@ -1410,7 +1462,7 @@ class WinClawGuiApp:
                 logger.info("CompanionEngine 调度器已停止")
             except Exception as e:
                 logger.warning(f"停止陪伴调度器失败: {e}")
-        
+
         # Phase 6: 清理意识系统
         if self._agent and hasattr(self._agent, 'cleanup'):
             try:

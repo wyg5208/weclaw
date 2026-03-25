@@ -245,6 +245,10 @@ class ToolRegistry:
             kwargs["schedules_dir"] = tool_config.get("schedules_dir", "")
         elif tool_name == "music_player":
             kwargs["library_dir"] = tool_config.get("library_dir", "")
+        elif tool_name == "todo":
+            kwargs["db_path"] = tool_config.get("db_path", "")
+        elif tool_name == "daily_task":
+            kwargs["db_path"] = tool_config.get("db_path", "")
                 
         return kwargs
 

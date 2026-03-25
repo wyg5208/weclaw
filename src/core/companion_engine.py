@@ -1312,7 +1312,36 @@ class CompanionEngine:
         # 保存当前情绪状态
         self.set_state("last_mood", self._current_mood.get("mood", "neutral"))
         self.set_state("last_shutdown_time", datetime.now().isoformat())
-    
+
+    # === 每日任务推送 ===
+
+    async def send_daily_task_message(self, message: str) -> None:
+        """发送每日任务推送消息。
+
+        通过 EventBus 发布事件，UI 层接收后显示在对话栏。
+
+        Args:
+            message: 每日任务消息内容
+        """
+        logger.info("发送每日任务推送")
+
+        # 通过 EventBus 发布事件
+        await self._event_bus.emit(
+            EventType.COMPANION_CARE_TRIGGERED,
+            {
+                "message": f"📋 {message}",
+                "topic_id": "daily_task",
+                "trigger_type": "scheduled",
+            }
+        )
+
+        # 记录日志
+        self._log_care_interaction(
+            topic_id="daily_task",
+            trigger_type="scheduled",
+            outcome="pushed",
+        )
+
     # === 定时调度器 ===
     
     async def start_scheduler(self) -> None:

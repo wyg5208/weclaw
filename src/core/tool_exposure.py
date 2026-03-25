@@ -97,6 +97,9 @@ def _extract_tool_name(func_name: str) -> str:
         "document_scanner",  # 高拍仪文档扫描
         "music_player",  # 歌曲库
         "english_conversation",  # 英语口语练习
+        "family_milestone",  # 家庭大事记
+        "todo",  # 待办事项
+        "daily_task",  # 每日任务
     ]
     for prefix in known_prefixes:
         if func_name.startswith(prefix + "_") or func_name == prefix:

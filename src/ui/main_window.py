@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QEvent, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDateEdit,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -35,9 +36,11 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QSizePolicy,
+    QSpinBox,
     QStatusBar,
     QTabWidget,
     QTextEdit,
+    QTimeEdit,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -1187,6 +1190,10 @@ class MainWindow(QMainWindow):
         history_tab = self._create_history_tab()
         self._right_tab_widget.addTab(history_tab, tr("📋 历史"))
 
+        # TAB 5: 目标任务
+        task_tab = self._create_task_tab()
+        self._right_tab_widget.addTab(task_tab, tr("📋 任务"))
+
         # 保留 _session_info 用于兼容现有代码（隐藏的）
         self._session_info = QLabel("新会话")
         self._session_info.setVisible(False)
@@ -1566,6 +1573,508 @@ class MainWindow(QMainWindow):
         self._history_all_sessions: list = []
 
         return widget
+
+    def _create_task_tab(self) -> QWidget:
+        """创建目标任务TAB页面（含待办事项/每日任务子TAB）。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # 标题行
+        header_layout = QHBoxLayout()
+        title_label = QLabel(tr("📋 目标任务"))
+        title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+
+        # 添加任务按钮
+        add_task_btn = QPushButton(tr("添加"))
+        add_task_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 45px; max-width: 55px;")
+        add_task_btn.clicked.connect(self._on_add_task)
+        header_layout.addWidget(add_task_btn)
+        layout.addLayout(header_layout)
+
+        # 子TAB控件（待办事项/每日任务）
+        self._task_sub_tab = QTabWidget()
+        self._task_sub_tab.setDocumentMode(True)
+
+        # 子TAB 1: 待办事项
+        todo_tab = self._create_todo_sub_tab()
+        self._task_sub_tab.addTab(todo_tab, tr("待办事项"))
+
+        # 子TAB 2: 每日任务
+        daily_tab = self._create_daily_task_sub_tab()
+        self._task_sub_tab.addTab(daily_tab, tr("每日任务"))
+
+        layout.addWidget(self._task_sub_tab)
+
+        # 保存待办事项列表用于筛选
+        self._todo_list: list = []
+        self._daily_task_list: list = []
+
+        return widget
+
+    def _create_todo_sub_tab(self) -> QWidget:
+        """创建待办事项子TAB页面。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # 时间周期筛选器
+        time_frame_layout = QHBoxLayout()
+        time_frame_layout.setSpacing(4)
+
+        from .task_card import create_time_frame_filter
+        time_filter_widget, self._get_time_frame_filter = create_time_frame_filter(self)
+        time_frame_layout.addWidget(time_filter_widget)
+        time_frame_layout.addStretch()
+        layout.addLayout(time_frame_layout)
+
+        # 搜索框
+        search_layout = QHBoxLayout()
+        self._todo_search_input = QLineEdit()
+        self._todo_search_input.setPlaceholderText(tr("搜索待办事项..."))
+        self._todo_search_input.textChanged.connect(self._on_todo_filter_changed)
+        search_layout.addWidget(self._todo_search_input, stretch=1)
+
+        # 状态筛选
+        self._todo_status_combo = QComboBox()
+        self._todo_status_combo.addItems([tr("全部"), tr("待办"), tr("进行中"), tr("已完成"), tr("已取消")])
+        self._todo_status_combo.setFixedWidth(70)
+        self._todo_status_combo.currentTextChanged.connect(self._on_todo_filter_changed)
+        search_layout.addWidget(self._todo_status_combo)
+        layout.addLayout(search_layout)
+
+        # 任务列表滚动区域
+        self._todo_scroll = QScrollArea()
+        self._todo_scroll.setWidgetResizable(True)
+        self._todo_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self._todo_list_widget = QWidget()
+        self._todo_list_layout = QVBoxLayout(self._todo_list_widget)
+        self._todo_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._todo_list_layout.setSpacing(4)
+
+        self._todo_scroll.setWidget(self._todo_list_widget)
+        layout.addWidget(self._todo_scroll, stretch=1)
+
+        # 空状态提示
+        self._todo_empty_label = QLabel(
+            tr("📭 暂无待办事项\n\n点击「添加」创建新任务")
+        )
+        self._todo_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._todo_empty_label.setStyleSheet("color: gray; font-size: 11px; padding: 15px;")
+        self._todo_empty_label.setWordWrap(True)
+        self._todo_list_layout.addWidget(self._todo_empty_label)
+        self._todo_list_layout.addStretch()
+
+        # 底部统计
+        self._todo_stats_label = QLabel(tr("统计: 0 个任务"))
+        self._todo_stats_label.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(self._todo_stats_label)
+
+        return widget
+
+    def _create_daily_task_sub_tab(self) -> QWidget:
+        """创建每日任务子TAB页面。"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        # 日期行
+        date_layout = QHBoxLayout()
+        date_label = QLabel(tr("日期:"))
+        date_layout.addWidget(date_label)
+
+        self._daily_date_edit = QDateEdit()
+        self._daily_date_edit.setCalendarPopup(True)
+        self._daily_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self._daily_date_edit.dateChanged.connect(self._on_daily_date_changed)
+        date_layout.addWidget(self._daily_date_edit)
+        date_layout.addStretch()
+
+        # 刷新按钮
+        refresh_btn = QPushButton(tr("刷新"))
+        refresh_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 45px; max-width: 55px;")
+        refresh_btn.clicked.connect(self._on_refresh_daily_tasks)
+        date_layout.addWidget(refresh_btn)
+        layout.addLayout(date_layout)
+
+        # 今日摘要
+        self._daily_summary_label = QLabel(tr("今日: 0 个任务"))
+        self._daily_summary_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self._daily_summary_label)
+
+        # 任务列表滚动区域
+        self._daily_scroll = QScrollArea()
+        self._daily_scroll.setWidgetResizable(True)
+        self._daily_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self._daily_list_widget = QWidget()
+        self._daily_list_layout = QVBoxLayout(self._daily_list_widget)
+        self._daily_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._daily_list_layout.setSpacing(4)
+
+        self._daily_scroll.setWidget(self._daily_list_widget)
+        layout.addWidget(self._daily_scroll, stretch=1)
+
+        # 空状态提示
+        self._daily_empty_label = QLabel(
+            tr("📭 今日暂无任务\n\n点击「添加」创建新任务")
+        )
+        self._daily_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._daily_empty_label.setStyleSheet("color: gray; font-size: 11px; padding: 15px;")
+        self._daily_empty_label.setWordWrap(True)
+        self._daily_list_layout.addWidget(self._daily_empty_label)
+        self._daily_list_layout.addStretch()
+
+        return widget
+
+    def _on_add_task(self) -> None:
+        """添加任务按钮处理。"""
+        current_tab = self._task_sub_tab.currentIndex()
+        if current_tab == 0:
+            self._on_add_todo()
+        else:
+            self._on_add_daily_task()
+
+    def _on_add_todo(self) -> None:
+        """添加待办事项。"""
+        from .task_dialog import TodoDialog
+        dialog = TodoDialog(parent=self)
+        dialog.todo_created.connect(self._on_todo_created)
+        dialog.exec()
+
+    def _on_todo_created(self, data: dict) -> None:
+        """待办事项创建完成。"""
+        # 调用工具创建
+        import asyncio
+        from src.tools.todo import TodoTool
+
+        async def create_todo():
+            tool = TodoTool()
+            result = await tool.execute("create_todo", data)
+            return result
+
+        try:
+            # 同步执行
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(create_todo())
+            loop.close()
+
+            if result.is_success:
+                self._refresh_todo_list()
+        except Exception as e:
+            logger.warning("创建待办事项失败: %s", e)
+
+    def _on_add_daily_task(self) -> None:
+        """添加每日任务。"""
+        from .task_dialog import DailyTaskDialog
+        dialog = DailyTaskDialog(todo_list=self._todo_list, parent=self)
+        dialog.task_created.connect(self._on_daily_task_created)
+        dialog.exec()
+
+    def _on_daily_task_created(self, data: dict) -> None:
+        """每日任务创建完成。"""
+        import asyncio
+        from datetime import datetime
+
+        from src.tools.daily_task import DailyTaskTool
+
+        # 设置任务日期
+        data["task_date"] = self._daily_date_edit.date().toString("yyyy-MM-dd")
+
+        async def create_task():
+            tool = DailyTaskTool()
+            result = await tool.execute("add_daily_task", data)
+            return result
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(create_task())
+            loop.close()
+
+            if result.is_success:
+                self._refresh_daily_task_list()
+        except Exception as e:
+            logger.warning("创建每日任务失败: %s", e)
+
+    def _on_todo_filter_changed(self) -> None:
+        """待办事项筛选条件变更。"""
+        self._refresh_todo_list()
+
+    def _on_daily_date_changed(self) -> None:
+        """每日任务日期变更。"""
+        self._refresh_daily_task_list()
+
+    def _on_refresh_daily_tasks(self) -> None:
+        """刷新每日任务。"""
+        self._refresh_daily_task_list()
+
+    def _refresh_todo_list(self) -> None:
+        """刷新待办事项列表。"""
+        import asyncio
+
+        from src.tools.todo import TodoTool
+
+        # 获取筛选条件
+        time_frame = self._get_time_frame_filter() if hasattr(self, '_get_time_frame_filter') else None
+        status_map = {0: None, 1: "pending", 2: "in_progress", 3: "completed", 4: "cancelled"}
+        status = status_map.get(self._todo_status_combo.currentIndex())
+        search = self._todo_search_input.text().strip()
+
+        async def load_todos():
+            tool = TodoTool()
+            result = await tool.execute("list_todos", {
+                "time_frame": time_frame,
+                "status": status,
+                "search": search if search else None,
+                "include_completed": status == "completed" if status else False,
+            })
+            return result
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(load_todos())
+            loop.close()
+
+            if result.is_success:
+                self._update_todo_list_ui(result.data.get("todos", []))
+        except Exception as e:
+            logger.warning("刷新待办事项失败: %s", e)
+
+    def _update_todo_list_ui(self, todos: list) -> None:
+        """更新待办事项列表UI。"""
+        # 清空现有列表
+        while self._todo_list_layout.count() > 1:
+            item = self._todo_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._todo_list = todos
+
+        # 显示/隐藏空状态
+        self._todo_empty_label.setVisible(len(todos) == 0)
+
+        # 添加卡片
+        from .task_card import TodoCard
+        for todo in todos:
+            card = TodoCard(todo)
+            card.start_clicked.connect(self._on_todo_start)
+            card.complete_clicked.connect(self._on_todo_complete)
+            card.edit_clicked.connect(self._on_todo_edit)
+            card.delete_clicked.connect(self._on_todo_delete)
+            self._todo_list_layout.insertWidget(self._todo_list_layout.count() - 1, card)
+
+        # 更新统计
+        self._todo_stats_label.setText(tr(f"统计: {len(todos)} 个任务"))
+
+    def _refresh_daily_task_list(self) -> None:
+        """刷新每日任务列表。"""
+        import asyncio
+
+        from src.tools.daily_task import DailyTaskTool
+
+        date = self._daily_date_edit.date().toString("yyyy-MM-dd")
+
+        async def load_tasks():
+            tool = DailyTaskTool()
+            result = await tool.execute("get_daily_tasks", {"date": date})
+            return result
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(load_tasks())
+            loop.close()
+
+            if result.is_success:
+                self._update_daily_task_list_ui(result.data.get("tasks", []))
+        except Exception as e:
+            logger.warning("刷新每日任务失败: %s", e)
+
+    def _update_daily_task_list_ui(self, tasks: list) -> None:
+        """更新每日任务列表UI。"""
+        # 清空现有列表
+        while self._daily_list_layout.count() > 1:
+            item = self._daily_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._daily_task_list = tasks
+
+        # 显示/隐藏空状态
+        self._daily_empty_label.setVisible(len(tasks) == 0)
+
+        # 添加卡片
+        from .task_card import DailyTaskCard
+        for task in tasks:
+            card = DailyTaskCard(task)
+            card.start_clicked.connect(self._on_daily_task_start)
+            card.complete_clicked.connect(self._on_daily_task_complete)
+            card.cancel_clicked.connect(self._on_daily_task_cancel)
+            self._daily_list_layout.insertWidget(self._daily_list_layout.count() - 1, card)
+
+        # 更新摘要
+        pending = sum(1 for t in tasks if t.get("status") == "pending")
+        in_progress = sum(1 for t in tasks if t.get("status") == "in_progress")
+        completed = sum(1 for t in tasks if t.get("status") == "completed")
+
+        self._daily_summary_label.setText(
+            tr(f"今日: {len(tasks)} 个任务 | 待办: {pending} | 进行中: {in_progress} | 已完成: {completed}")
+        )
+
+    def _on_todo_start(self, todo_id: int) -> None:
+        """待办事项开始处理。"""
+        import asyncio
+        from src.tools.todo import TodoTool
+
+        async def update_status():
+            tool = TodoTool()
+            return await tool.execute("update_todo", {"id": todo_id, "status": "in_progress"})
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(update_status())
+            loop.close()
+            if result.is_success:
+                self._refresh_todo_list()
+        except Exception as e:
+            logger.warning("更新待办事项状态失败: %s", e)
+
+    def _on_todo_complete(self, todo_id: int) -> None:
+        """待办事项完成处理。"""
+        import asyncio
+        from src.tools.todo import TodoTool
+
+        async def complete():
+            tool = TodoTool()
+            return await tool.execute("complete_todo", {"id": todo_id})
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(complete())
+            loop.close()
+            if result.is_success:
+                self._refresh_todo_list()
+        except Exception as e:
+            logger.warning("完成待办事项失败: %s", e)
+
+    def _on_todo_edit(self, todo_id: int) -> None:
+        """待办事项编辑处理。"""
+        # 查找待办事项数据
+        todo_data = None
+        for todo in self._todo_list:
+            if todo.get("id") == todo_id:
+                todo_data = todo
+                break
+
+        if todo_data:
+            from .task_dialog import TodoDialog
+            dialog = TodoDialog(todo_data=todo_data, parent=self)
+            dialog.todo_updated.connect(self._on_todo_updated)
+            dialog.exec()
+
+    def _on_todo_updated(self, todo_id: int, data: dict) -> None:
+        """待办事项更新完成。"""
+        import asyncio
+        from src.tools.todo import TodoTool
+
+        async def update():
+            tool = TodoTool()
+            return await tool.execute("update_todo", {"id": todo_id, **data})
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(update())
+            loop.close()
+            if result.is_success:
+                self._refresh_todo_list()
+        except Exception as e:
+            logger.warning("更新待办事项失败: %s", e)
+
+    def _on_todo_delete(self, todo_id: int) -> None:
+        """待办事项删除处理。"""
+        from PySide6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(
+            self, tr("确认删除"),
+            tr("确定要删除这个待办事项吗？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            import asyncio
+            from src.tools.todo import TodoTool
+
+            async def delete():
+                tool = TodoTool()
+                return await tool.execute("delete_todo", {"id": todo_id})
+
+            try:
+                loop = asyncio.new_event_loop()
+                result = loop.run_until_complete(delete())
+                loop.close()
+                if result.is_success:
+                    self._refresh_todo_list()
+            except Exception as e:
+                logger.warning("删除待办事项失败: %s", e)
+
+    def _on_daily_task_start(self, task_id: int) -> None:
+        """每日任务开始处理。"""
+        import asyncio
+        from src.tools.daily_task import DailyTaskTool
+
+        async def start():
+            tool = DailyTaskTool()
+            return await tool.execute("start_task", {"id": task_id})
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(start())
+            loop.close()
+            if result.is_success:
+                self._refresh_daily_task_list()
+        except Exception as e:
+            logger.warning("开始每日任务失败: %s", e)
+
+    def _on_daily_task_complete(self, task_id: int) -> None:
+        """每日任务完成处理。"""
+        import asyncio
+        from src.tools.daily_task import DailyTaskTool
+
+        async def complete():
+            tool = DailyTaskTool()
+            return await tool.execute("complete_task", {"id": task_id})
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(complete())
+            loop.close()
+            if result.is_success:
+                self._refresh_daily_task_list()
+        except Exception as e:
+            logger.warning("完成每日任务失败: %s", e)
+
+    def _on_daily_task_cancel(self, task_id: int) -> None:
+        """每日任务取消处理。"""
+        import asyncio
+        from src.tools.daily_task import DailyTaskTool
+
+        async def cancel():
+            tool = DailyTaskTool()
+            return await tool.execute("cancel_task", {"id": task_id})
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(cancel())
+            loop.close()
+            if result.is_success:
+                self._refresh_daily_task_list()
+        except Exception as e:
+            logger.warning("取消每日任务失败: %s", e)
 
     def _setup_status_bar(self) -> None:
         """设置状态栏（P2-12 增强版）。"""

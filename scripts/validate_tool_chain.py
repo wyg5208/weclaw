@@ -90,6 +90,9 @@ def get_known_prefixes() -> set[str]:
         "document_scanner",  # 高拍仪文档扫描
         "music_player",  # 歌曲库
         "english_conversation",  # 英语口语练习
+        "family_milestone",  # 家庭大事记
+        "todo",  # 待办事项
+        "daily_task",  # 每日任务
     }
 
 

@@ -523,6 +523,11 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "档案", "家庭成员", "联系人", "生日", "成长记录",
         "课程表", "课表", "上课安排", "学习计划",
         "食谱", "菜单", "学校食谱", "家庭食谱", "今天吃什么", "营养食谱",
+        "大事记", "纪念日", "重要事件", "家庭事件", "家族史",
+        "结婚纪念", "周年", "节日记录", "重大议程", "家庭议程",
+        "待办", "待办事项", "任务", "每日任务", "任务清单", "计划",
+        "目标", "日程", "提醒我", "别忘了", "记住", "要做什么",
+        "今天任务", "本周任务", "要做的事", "完成", "进度",
     ],
     "email_task": [
         "邮件", "发邮件", "收邮件", "邮箱", "inbox",
@@ -636,7 +641,8 @@ INTENT_TOOL_MAPPING: dict[str, list[str]] = {
     ],
     "knowledge": ["knowledge_rag", "batch_paper_analyzer", "file", "search", "chat_history", "python_runner", "literature_search"],
     "life_management": [
-        "diary", "finance", "health", "medication", "user_profile", "family_member", "course_schedule", "meal_menu",
+        "diary", "finance", "health", "medication", "user_profile", "family_member", "course_schedule", "meal_menu", "family_milestone",
+        "todo", "daily_task",
     ],
     "email_task": ["email"],
     "multimedia": [
@@ -704,7 +710,7 @@ INTENT_PRIORITY_MAP: dict[str, dict[str, list[str]]] = {
         "alternative": ["file", "search", "chat_history", "python_runner"],
     },
     "life_management": {
-        "recommended": ["diary", "finance", "health", "medication", "user_profile", "family_member", "course_schedule", "meal_menu"],
+        "recommended": ["diary", "finance", "health", "medication", "user_profile", "family_member", "course_schedule", "meal_menu", "family_milestone", "todo", "daily_task"],
         "alternative": [],
     },
     "email_task": {
