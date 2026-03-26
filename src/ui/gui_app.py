@@ -2127,25 +2127,40 @@ class WinClawGuiApp:
         logger.info("Agent 调用录音工具，已显示内联录音状态")
 
     def _on_agent_tool_call_finished(self, tool_name: str, action: str, result_preview: str) -> None:
-        """Agent 工具执行完毕的回调，更新内联录音状态。"""
-        if tool_name != "voice_input" or action != "record_and_transcribe":
-            return
+        """Agent 工具执行完毕的回调，更新状态和刷新任务列表。"""
+        # 1. 处理录音工具（voice_input）
+        if tool_name == "voice_input" and action == "record_and_transcribe":
+            try:
+                if "录音转录成功" in result_preview:
+                    self._window.set_voice_status("✅ 完成")
+                    # 1.5秒后隐藏录音UI
+                    QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
+                elif "未识别" in result_preview or not result_preview.strip():
+                    self._window.set_voice_status("🔇 无语音")
+                    # 1.5秒后隐藏录音UI
+                    QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
+                else:
+                    self._window.set_voice_status("❌ 失败")
+                    # 2秒后隐藏录音UI
+                    QTimer.singleShot(2000, self._window.hide_voice_recording_ui)
+            except Exception as e:
+                logger.exception("更新录音状态失败: %s", e)
 
-        try:
-            if "录音转录成功" in result_preview:
-                self._window.set_voice_status("✅ 完成")
-                # 1.5秒后隐藏录音UI
-                QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
-            elif "未识别" in result_preview or not result_preview.strip():
-                self._window.set_voice_status("🔇 无语音")
-                # 1.5秒后隐藏录音UI
-                QTimer.singleShot(1500, self._window.hide_voice_recording_ui)
-            else:
-                self._window.set_voice_status("❌ 失败")
-                # 2秒后隐藏录音UI
-                QTimer.singleShot(2000, self._window.hide_voice_recording_ui)
-        except Exception as e:
-            logger.exception("更新录音状态失败: %s", e)
+        # 2. 处理待办事项创建（todo）
+        if tool_name == "todo" and action == "create_todo":
+            try:
+                logger.info("待办事项已创建，刷新任务列表")
+                self._window.refresh_todo_list()
+            except Exception as e:
+                logger.warning("刷新待办列表失败: %s", e)
+
+        # 3. 处理每日任务创建（daily_task）
+        if tool_name == "daily_task" and action == "add_daily_task":
+            try:
+                logger.info("每日任务已创建，刷新任务列表")
+                self._window.refresh_daily_task_list()
+            except Exception as e:
+                logger.warning("刷新每日任务列表失败: %s", e)
 
     def _on_whisper_model_changed(self, model_name: str) -> None:
         """处理 Whisper 模型切换。"""

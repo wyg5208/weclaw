@@ -1028,7 +1028,7 @@
         "risk_level": "low",
         "require_confirmation": false
       },
-      "actions": ["create_schedule", "query_schedule", "add_course", "edit_course", "delete_course"]
+      "actions": ["create_schedule", "search_courses", "add_course", "edit_course", "delete_course"]
     },
     "meal_menu": {
       "enabled": true,

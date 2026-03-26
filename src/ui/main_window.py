@@ -1211,6 +1211,9 @@ class MainWindow(QMainWindow):
             self.knowledge_rag_requested.emit()
         elif index == 3:  # 历史对话TAB
             self.history_refresh_requested.emit()
+        elif index == 4:  # 任务TAB
+            self._refresh_todo_list()
+            self._refresh_daily_task_list()
 
     def _create_tools_status_tab(self) -> QWidget:
         """创建工具执行状态TAB页面。"""
@@ -1750,25 +1753,17 @@ class MainWindow(QMainWindow):
 
     def _on_todo_created(self, data: dict) -> None:
         """待办事项创建完成。"""
-        # 调用工具创建
-        import asyncio
         from src.tools.todo import TodoTool
 
         async def create_todo():
             tool = TodoTool()
-            result = await tool.execute("create_todo", data)
-            return result
+            return await tool.execute("create_todo", data)
 
-        try:
-            # 同步执行
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(create_todo())
-            loop.close()
-
+        def on_success(result):
             if result.is_success:
                 self._refresh_todo_list()
-        except Exception as e:
-            logger.warning("创建待办事项失败: %s", e)
+
+        self._run_async_safe(create_todo(), on_success=on_success)
 
     def _on_add_daily_task(self) -> None:
         """添加每日任务。"""
@@ -1779,9 +1774,6 @@ class MainWindow(QMainWindow):
 
     def _on_daily_task_created(self, data: dict) -> None:
         """每日任务创建完成。"""
-        import asyncio
-        from datetime import datetime
-
         from src.tools.daily_task import DailyTaskTool
 
         # 设置任务日期
@@ -1789,18 +1781,13 @@ class MainWindow(QMainWindow):
 
         async def create_task():
             tool = DailyTaskTool()
-            result = await tool.execute("add_daily_task", data)
-            return result
+            return await tool.execute("add_daily_task", data)
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(create_task())
-            loop.close()
-
+        def on_success(result):
             if result.is_success:
                 self._refresh_daily_task_list()
-        except Exception as e:
-            logger.warning("创建每日任务失败: %s", e)
+
+        self._run_async_safe(create_task(), on_success=on_success)
 
     def _on_todo_filter_changed(self) -> None:
         """待办事项筛选条件变更。"""
@@ -1814,10 +1801,50 @@ class MainWindow(QMainWindow):
         """刷新每日任务。"""
         self._refresh_daily_task_list()
 
+    # ------------------------------------------------------------------
+    # 公开刷新方法（供外部调用，如 GuiApp 工具调用完成后刷新）
+    # ------------------------------------------------------------------
+
+    def _run_async_safe(self, coro, on_success=None, on_error=None) -> None:
+        """安全运行异步协程，避免事件循环冲突。
+        
+        Args:
+            coro: 异步协程
+            on_success: 成功回调，接收 result 参数
+            on_error: 失败回调，接收 exception 参数
+        """
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+
+        def run_in_thread():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(coro)
+                loop.close()
+                if on_success:
+                    QTimer.singleShot(0, lambda: on_success(result))
+            except Exception as e:
+                logger.warning("异步操作失败: %s", e)
+                if on_error:
+                    QTimer.singleShot(0, lambda: on_error(e))
+
+        # 如果有运行中的事件循环，使用线程池执行
+        if self._bridge and hasattr(self._bridge, '_loop') and self._bridge._loop:
+            ThreadPoolExecutor(max_workers=1).submit(run_in_thread)
+        else:
+            QTimer.singleShot(0, run_in_thread)
+
+    def refresh_todo_list(self) -> None:
+        """刷新待办事项列表（公开方法）。"""
+        self._refresh_todo_list()
+
+    def refresh_daily_task_list(self) -> None:
+        """刷新每日任务列表（公开方法）。"""
+        self._refresh_daily_task_list()
+
     def _refresh_todo_list(self) -> None:
         """刷新待办事项列表。"""
-        import asyncio
-
         from src.tools.todo import TodoTool
 
         # 获取筛选条件
@@ -1828,23 +1855,19 @@ class MainWindow(QMainWindow):
 
         async def load_todos():
             tool = TodoTool()
-            result = await tool.execute("list_todos", {
+            return await tool.execute("list_todos", {
                 "time_frame": time_frame,
                 "status": status,
                 "search": search if search else None,
                 "include_completed": status == "completed" if status else False,
             })
-            return result
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(load_todos())
-            loop.close()
-
+        def on_success(result):
             if result.is_success:
-                self._update_todo_list_ui(result.data.get("todos", []))
-        except Exception as e:
-            logger.warning("刷新待办事项失败: %s", e)
+                todos = result.data.get("todos", [])
+                self._update_todo_list_ui(todos)
+
+        self._run_async_safe(load_todos(), on_success=on_success)
 
     def _update_todo_list_ui(self, todos: list) -> None:
         """更新待办事项列表UI。"""
@@ -1874,26 +1897,20 @@ class MainWindow(QMainWindow):
 
     def _refresh_daily_task_list(self) -> None:
         """刷新每日任务列表。"""
-        import asyncio
-
         from src.tools.daily_task import DailyTaskTool
 
         date = self._daily_date_edit.date().toString("yyyy-MM-dd")
 
         async def load_tasks():
             tool = DailyTaskTool()
-            result = await tool.execute("get_daily_tasks", {"date": date})
-            return result
+            return await tool.execute("get_daily_tasks", {"date": date})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(load_tasks())
-            loop.close()
-
+        def on_success(result):
             if result.is_success:
-                self._update_daily_task_list_ui(result.data.get("tasks", []))
-        except Exception as e:
-            logger.warning("刷新每日任务失败: %s", e)
+                tasks = result.data.get("tasks", [])
+                self._update_daily_task_list_ui(tasks)
+
+        self._run_async_safe(load_tasks(), on_success=on_success)
 
     def _update_daily_task_list_ui(self, tasks: list) -> None:
         """更新每日任务列表UI。"""
@@ -1935,32 +1952,25 @@ class MainWindow(QMainWindow):
             tool = TodoTool()
             return await tool.execute("update_todo", {"id": todo_id, "status": "in_progress"})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(update_status())
-            loop.close()
+        def on_success(result):
             if result.is_success:
                 self._refresh_todo_list()
-        except Exception as e:
-            logger.warning("更新待办事项状态失败: %s", e)
+
+        self._run_async_safe(update_status(), on_success=on_success)
 
     def _on_todo_complete(self, todo_id: int) -> None:
         """待办事项完成处理。"""
-        import asyncio
         from src.tools.todo import TodoTool
 
         async def complete():
             tool = TodoTool()
             return await tool.execute("complete_todo", {"id": todo_id})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(complete())
-            loop.close()
+        def on_success(result):
             if result.is_success:
                 self._refresh_todo_list()
-        except Exception as e:
-            logger.warning("完成待办事项失败: %s", e)
+
+        self._run_async_safe(complete(), on_success=on_success)
 
     def _on_todo_edit(self, todo_id: int) -> None:
         """待办事项编辑处理。"""
@@ -1979,21 +1989,17 @@ class MainWindow(QMainWindow):
 
     def _on_todo_updated(self, todo_id: int, data: dict) -> None:
         """待办事项更新完成。"""
-        import asyncio
         from src.tools.todo import TodoTool
 
         async def update():
             tool = TodoTool()
             return await tool.execute("update_todo", {"id": todo_id, **data})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(update())
-            loop.close()
+        def on_success(result):
             if result.is_success:
                 self._refresh_todo_list()
-        except Exception as e:
-            logger.warning("更新待办事项失败: %s", e)
+
+        self._run_async_safe(update(), on_success=on_success)
 
     def _on_todo_delete(self, todo_id: int) -> None:
         """待办事项删除处理。"""
@@ -2006,75 +2012,59 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            import asyncio
             from src.tools.todo import TodoTool
 
             async def delete():
                 tool = TodoTool()
                 return await tool.execute("delete_todo", {"id": todo_id})
 
-            try:
-                loop = asyncio.new_event_loop()
-                result = loop.run_until_complete(delete())
-                loop.close()
+            def on_success(result):
                 if result.is_success:
                     self._refresh_todo_list()
-            except Exception as e:
-                logger.warning("删除待办事项失败: %s", e)
+
+            self._run_async_safe(delete(), on_success=on_success)
 
     def _on_daily_task_start(self, task_id: int) -> None:
         """每日任务开始处理。"""
-        import asyncio
         from src.tools.daily_task import DailyTaskTool
 
         async def start():
             tool = DailyTaskTool()
             return await tool.execute("start_task", {"id": task_id})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(start())
-            loop.close()
+        def on_success(result):
             if result.is_success:
                 self._refresh_daily_task_list()
-        except Exception as e:
-            logger.warning("开始每日任务失败: %s", e)
+
+        self._run_async_safe(start(), on_success=on_success)
 
     def _on_daily_task_complete(self, task_id: int) -> None:
         """每日任务完成处理。"""
-        import asyncio
         from src.tools.daily_task import DailyTaskTool
 
         async def complete():
             tool = DailyTaskTool()
             return await tool.execute("complete_task", {"id": task_id})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(complete())
-            loop.close()
+        def on_success(result):
             if result.is_success:
                 self._refresh_daily_task_list()
-        except Exception as e:
-            logger.warning("完成每日任务失败: %s", e)
+
+        self._run_async_safe(complete(), on_success=on_success)
 
     def _on_daily_task_cancel(self, task_id: int) -> None:
         """每日任务取消处理。"""
-        import asyncio
         from src.tools.daily_task import DailyTaskTool
 
         async def cancel():
             tool = DailyTaskTool()
             return await tool.execute("cancel_task", {"id": task_id})
 
-        try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(cancel())
-            loop.close()
+        def on_success(result):
             if result.is_success:
                 self._refresh_daily_task_list()
-        except Exception as e:
-            logger.warning("取消每日任务失败: %s", e)
+
+        self._run_async_safe(cancel(), on_success=on_success)
 
     def _setup_status_bar(self) -> None:
         """设置状态栏（P2-12 增强版）。"""

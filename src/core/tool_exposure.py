@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 def annotate_schema_priority(
     schemas: list[dict[str, Any]],
-    intent_result: IntentResult,
+    intent_result: Any,
 ) -> list[dict[str, Any]]:
     """根据意图在 Schema description 前添加优先级标注。
 
@@ -39,15 +39,23 @@ def annotate_schema_priority(
 
     Args:
         schemas: 原始 function calling schema 列表
-        intent_result: 意图识别结果
+        intent_result: 意图识别结果（支持对象或字典格式）
 
     Returns:
         标注后的 schema 列表（深拷贝，不修改原始数据）
     """
-    if not intent_result.primary_intent:
+    # 支持对象和字典两种格式
+    if hasattr(intent_result, 'primary_intent'):
+        primary_intent = intent_result.primary_intent
+    elif isinstance(intent_result, dict):
+        primary_intent = intent_result.get("primary_intent", "")
+    else:
+        primary_intent = ""
+
+    if not primary_intent:
         return schemas
 
-    priority = INTENT_PRIORITY_MAP.get(intent_result.primary_intent, {})
+    priority = INTENT_PRIORITY_MAP.get(primary_intent, {})
     recommended = set(priority.get("recommended", []))
     alternative = set(priority.get("alternative", []))
 
@@ -100,6 +108,7 @@ def _extract_tool_name(func_name: str) -> str:
         "family_milestone",  # 家庭大事记
         "todo",  # 待办事项
         "daily_task",  # 每日任务
+        "medication",  # 用药管理
     ]
     for prefix in known_prefixes:
         if func_name.startswith(prefix + "_") or func_name == prefix:

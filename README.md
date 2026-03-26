@@ -717,7 +717,7 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 #### 家庭成员课程表管理 📅
 - ✅ 新增 `course_schedule` 工具，支持家庭成员周课程表管理
-- ✅ 5 个核心 Actions：create_schedule、query_schedule、add_course、edit_course、delete_course
+- ✅ 5 个核心 Actions：create_schedule、search_courses、add_course、edit_course、delete_course
 - ✅ 支持 4 种课程类型（课程/课间/活动/休息）
 - ✅ 双轨机制设计（Skill + Tool）
 - ✅ 时间冲突自动检测
