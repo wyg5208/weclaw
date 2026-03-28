@@ -647,12 +647,29 @@ class WinClawGuiApp:
                 default_key = all_models[0].key
                 logger.info("使用第一个模型作为默认：%s", default_key)
 
-        # 创建 Agent
-        self._agent = Agent(
-            model_registry=self._model_registry,
-            tool_registry=self._tool_registry,
-            model_key=default_key,
-        )
+        # 创建 Agent（加载工具调用链路优化配置）
+        agent_kwargs: dict = {
+            "model_registry": self._model_registry,
+            "tool_registry": self._tool_registry,
+            "model_key": default_key,
+        }
+        try:
+            try:
+                import tomllib
+            except ImportError:
+                import tomli as tomllib
+            _cfg_path = Path(__file__).parent.parent.parent / "config" / "default.toml"
+            if _cfg_path.exists():
+                with open(_cfg_path, "rb") as _f:
+                    _cfg = tomllib.load(_f)
+                _tool_opt = _cfg.get("agent", {}).get("tool_optimization", {})
+                if "intent_mode" in _tool_opt:
+                    agent_kwargs["intent_mode"] = _tool_opt["intent_mode"]
+                if "intent_llm_model" in _tool_opt:
+                    agent_kwargs["intent_llm_model"] = _tool_opt["intent_llm_model"]
+        except Exception as e:
+            logger.debug("加载 intent_mode 配置失败，使用默认值: %s", e)
+        self._agent = Agent(**agent_kwargs)
         
         # 【关键】将 agent 设置到 bridge，以便 MainWindow 可以访问意识系统
         if self._bridge:

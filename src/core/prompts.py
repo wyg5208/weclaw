@@ -360,6 +360,16 @@ CORE_SYSTEM_PROMPT = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面
    - 如果多次尝试仍失败，建议用户检查相关服务状态或尝试替代方案
 
 5. **始终锚定用户意图**：无论执行到第几步，都必须记住用户的原始请求，每一步都要确保是在推进这个请求的完成。
+
+6. **附件处理原则**：
+   - 当用户提供 Excel/CSV 附件并要求分析时，只使用 data_processor 和 data_visualization
+   - 禁止在数据分析任务中调用 cron、weather、course_schedule 等无关工具
+   - 数据分析的标准流程：read_excel/read_data → filter/aggregate → plot_chart → 报告
+
+7. **偏离自检**：
+   - 每次调用工具前，自问："这个工具是否在推进用户的原始请求？"
+   - 如果答案是"不确定"或"不是"，立即停止，回到原始请求
+   - 如果发现自己在做与原始请求无关的事（如天气查询、定时任务），说明已经偏离，必须立即回到正轨
 """
 
 
@@ -594,6 +604,16 @@ class IntentResult:
     prompt_modules: set[str] = field(default_factory=set)
     """需要注入的 prompt 模块名称（"assembly" / "mcp"）"""
 
+    # LLM 智能模式扩展字段
+    llm_recommended_tools: list[str] = field(default_factory=list)
+    """LLM 推荐使用的工具名列表"""
+
+    llm_forbidden_tools: list[str] = field(default_factory=list)
+    """LLM 标记为禁用的工具名列表"""
+
+    llm_execution_plan: str = ""
+    """LLM 生成的简要执行计划"""
+
 
 # ------------------------------------------------------------------
 # 多维度意图关键词定义
@@ -678,6 +698,11 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "数据可视化", "可视化", "仪表盘", "dashboard",
         "财务报表", "资产负债表", "利润表", "现金流量表", "财务分析",
         "财务报告", "报表",
+        # Phase 6+: 财务场景高频词
+        "流水", "汇总", "账单", "交易明细", "收支分析",
+        "财务汇总", "数据汇总", "统计分析", "趋势分析",
+        # Phase 6+: 文件类型关键词
+        "csv", "xls",
     ],
     "creative_content": [
         "写论文", "写文章", "写小说", "续写", "写作",
@@ -905,6 +930,28 @@ def detect_intent_with_confidence(user_input: str) -> IntentResult:
     """
     input_lower = user_input.lower()
 
+    # Phase 6+: 附件上下文感知 — 从附件信息提取文件扩展名作为意图强信号
+    _ATTACHMENT_INTENT_MAP = {
+        ".xls": "data_analysis",
+        ".xlsx": "data_analysis",
+        ".csv": "data_analysis",
+        ".pdf": "document_processing",
+        ".docx": "document_assembly",
+        ".doc": "document_assembly",
+        ".ppt": "document_processing",
+        ".pptx": "document_processing",
+    }
+    attachment_intent_boost: str = ""
+    if "[附件信息]" in user_input or "[附件" in user_input:
+        import re
+        # 匹配常见文件扩展名
+        ext_matches = re.findall(r'\.(xls|xlsx|csv|pdf|docx|doc|pptx|ppt)\b', input_lower)
+        for ext in ext_matches:
+            matched_intent = _ATTACHMENT_INTENT_MAP.get(f".{ext}", "")
+            if matched_intent:
+                attachment_intent_boost = matched_intent
+                break
+
     # 1. 各维度关键词匹配
     intent_scores: dict[str, float] = {}
     intent_matched: dict[str, list[str]] = {}
@@ -922,6 +969,15 @@ def detect_intent_with_confidence(user_input: str) -> IntentResult:
         if any(kw in input_lower for kw in EXCLUDE_ASSEMBLY_KEYWORDS):
             del intent_scores["document_assembly"]
             intent_matched.pop("document_assembly", None)
+
+    # 2.5 Phase 6+: 附件扩展名意图加成（强信号 +0.3）
+    if attachment_intent_boost and attachment_intent_boost in INTENT_CATEGORIES:
+        current_score = intent_scores.get(attachment_intent_boost, 0.0)
+        intent_scores[attachment_intent_boost] = current_score + 0.3
+        if attachment_intent_boost not in intent_matched:
+            intent_matched[attachment_intent_boost] = [f"[附件扩展名]"]
+        else:
+            intent_matched[attachment_intent_boost].append("[附件扩展名]")
 
     # 3. 计算置信度
     if not intent_scores:
@@ -1095,3 +1151,101 @@ async def classify_intent_with_model(
         return "unknown"
     except Exception:
         return "unknown"
+
+
+# ============================================================
+# LLM 智能意图识别（双模式架构 — LLM 模式）
+# ============================================================
+
+LLM_TOOL_CLASSIFY_PROMPT = """你是工具选择专家。根据用户请求和可用工具清单，判断应该使用哪些工具。
+
+## 用户请求
+{user_input}
+
+## 可用工具清单（摘要）
+{tool_summary}
+
+## 请输出JSON格式：
+{{
+  "task_type": "任务类型简述",
+  "recommended_tools": ["推荐使用的工具名"],
+  "forbidden_tools": ["明确不应使用的工具名"],
+  "execution_plan": "简要执行步骤描述"
+}}
+
+规则：
+1. recommended_tools 只列出直接服务于用户请求的工具（通常 1-5 个）
+2. forbidden_tools 列出与请求明显无关且可能干扰的工具（如数据分析任务中的 cron、weather、course_schedule 等）
+3. 不确定的工具不要放入任何列表
+4. 核心工具（shell、file、screen、search）不要放入 forbidden_tools
+5. 只输出 JSON，不要输出其他内容
+"""
+
+
+def build_tool_summary(tool_registry: object) -> str:
+    """从工具注册表生成摘要清单（用于 LLM 分类）。
+
+    Args:
+        tool_registry: ToolRegistry 实例
+
+    Returns:
+        工具摘要文本，每行一个工具
+    """
+    lines: list[str] = []
+    for tool in tool_registry.list_tools():
+        actions = ", ".join(a.name for a in tool.get_actions())
+        # 截取 description 前 80 字符，避免过长
+        desc = (tool.description or tool.name)[:80]
+        lines.append(f"- {tool.name}: {desc}（{actions}）")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
+# 意图互斥工具映射（用于前置验证 — 两种模式共用的规则模式验证源）
+# ------------------------------------------------------------------
+
+INTENT_EXCLUSIVE_TOOLS: dict[str, dict[str, list[str]]] = {
+    "data_analysis": {
+        "exclude": [
+            "cron", "weather", "course_schedule", "meal_menu",
+            "family_milestone", "music_player", "english_conversation",
+            "diary", "medication", "todo", "daily_task",
+        ],
+    },
+    "document_assembly": {
+        "exclude": [
+            "cron", "course_schedule", "meal_menu",
+            "music_player", "english_conversation", "medication",
+        ],
+    },
+    "document_processing": {
+        "exclude": [
+            "cron", "weather", "course_schedule", "meal_menu",
+            "music_player", "english_conversation", "diary", "medication",
+        ],
+    },
+    "browser_automation": {
+        "exclude": [
+            "cron", "weather", "course_schedule", "meal_menu",
+            "diary", "medication", "music_player",
+        ],
+    },
+    "creative_content": {
+        "exclude": [
+            "cron", "weather", "course_schedule", "meal_menu",
+            "music_player", "english_conversation", "medication",
+        ],
+    },
+    "education": {
+        "exclude": [
+            "cron", "weather", "meal_menu", "music_player",
+            "diary", "medication", "family_milestone",
+        ],
+    },
+    "research": {
+        "exclude": [
+            "cron", "weather", "course_schedule", "meal_menu",
+            "music_player", "diary", "medication",
+        ],
+    },
+}

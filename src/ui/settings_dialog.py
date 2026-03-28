@@ -415,6 +415,25 @@ class SettingsDialog(QDialog):
         model_label.setStyleSheet("font-size: 11px; min-width: 50px; max-width: 60px;")
         model_layout.addRow(model_label, self._model_combo)
 
+        # 意图识别模式选择
+        self._intent_mode_combo = QComboBox()
+        self._intent_mode_combo.addItem(tr("规则引擎（快速，零成本）"), "rule")
+        self._intent_mode_combo.addItem(tr("LLM 智能分析（精准，有延迟和成本）"), "llm")
+        # 加载当前配置
+        self._load_intent_mode_setting()
+        self._intent_mode_combo.currentIndexChanged.connect(self._on_intent_mode_changed)
+        intent_label = QLabel(tr("工具意图识别") + ":")
+        intent_label.setStyleSheet("font-size: 11px; min-width: 50px; max-width: 80px;")
+        model_layout.addRow(intent_label, self._intent_mode_combo)
+
+        intent_hint = QLabel(
+            tr("规则引擎：零延迟零成本，适合简单请求") + "\n"
+            + tr("LLM 智能：语义精准，适合复杂请求（每次 ~2000 tokens）")
+        )
+        intent_hint.setWordWrap(True)
+        intent_hint.setStyleSheet("font-size: 10px; color: gray;")
+        model_layout.addRow("", intent_hint)
+
         layout.addWidget(model_group)
 
         # ---------- 语音识别 ----------
@@ -536,6 +555,57 @@ class SettingsDialog(QDialog):
                 tr("提示"),
                 tr("已清除自定义音乐文件夹，将使用 Windows 默认音乐文件夹。")
             )
+
+    # ── 意图识别模式 设置 ──────────────────────────────────────
+
+    def _load_intent_mode_setting(self) -> None:
+        """从 default.toml 加载意图识别模式并设置下拉框。"""
+        try:
+            try:
+                import tomllib
+            except ImportError:
+                import tomli as tomllib
+            from pathlib import Path
+
+            config_path = Path(__file__).parent.parent.parent / "config" / "default.toml"
+            if config_path.exists():
+                with open(config_path, "rb") as f:
+                    config = tomllib.load(f)
+                mode = (
+                    config.get("agent", {})
+                    .get("tool_optimization", {})
+                    .get("intent_mode", "rule")
+                )
+                idx = self._intent_mode_combo.findData(mode)
+                if idx >= 0:
+                    self._intent_mode_combo.setCurrentIndex(idx)
+        except Exception:
+            logger.debug("加载意图识别模式配置失败，使用默认值", exc_info=True)
+
+    def _on_intent_mode_changed(self, _index: int) -> None:
+        """用户切换意图识别模式时，写回 default.toml。"""
+        new_mode = self._intent_mode_combo.currentData()
+        if not new_mode:
+            return
+        try:
+            from pathlib import Path
+            import re
+
+            config_path = Path(__file__).parent.parent.parent / "config" / "default.toml"
+            if not config_path.exists():
+                return
+            text = config_path.read_text(encoding="utf-8")
+            # 替换 intent_mode = "xxx" 行
+            new_text = re.sub(
+                r'(intent_mode\s*=\s*)"[^"]*"',
+                rf'\1"{new_mode}"',
+                text,
+                count=1,
+            )
+            config_path.write_text(new_text, encoding="utf-8")
+            logger.info("意图识别模式已切换为: %s", new_mode)
+        except Exception:
+            logger.warning("保存意图识别模式失败", exc_info=True)
 
     def _on_theme_changed(self, index: int) -> None:
         """主题切换。"""

@@ -42,6 +42,8 @@ from src.core.prompts import (
     CORE_SYSTEM_PROMPT,
     COMPANION_PROMPT_MODULE,
     IntentResult,
+    INTENT_EXCLUSIVE_TOOLS,
+    INTENT_TOOL_MAPPING,
 )
 from src.core.tool_exposure import ToolExposureEngine
 from src.core.session import SessionManager
@@ -249,6 +251,9 @@ class Agent:
         enable_tool_tiering: bool = True,
         enable_schema_annotation: bool = True,
         failures_to_upgrade: int = 2,
+        # Phase 6+: 意图识别模式配置
+        intent_mode: str = "rule",
+        intent_llm_model: str = "deepseek-chat",
         # Phase 6: 全链路追踪配置
         enable_trace: bool = True,
         trace_config: dict[str, Any] | None = None,
@@ -276,6 +281,15 @@ class Agent:
             enable_annotation=enable_schema_annotation,
             failures_to_upgrade=failures_to_upgrade,
         )
+
+        # Phase 6+: 意图识别模式
+        self._intent_mode = intent_mode  # "rule" 或 "llm"
+        self._intent_llm_model = intent_llm_model
+
+        # 工具摘要缓存（LLM 模式使用，初始化时生成一次）
+        self._tool_summary_cache: str = ""
+        if self._intent_mode == "llm":
+            self._tool_summary_cache = self._build_tool_summary()
 
         # Phase 6: 全链路追踪配置
         self._enable_trace = enable_trace
@@ -406,6 +420,19 @@ class Agent:
         if recent_actions:
             actions_str = "、".join(recent_actions[-3:])  # 最近3个操作
             status_lines.append(f"已执行操作：{actions_str}")
+
+        # Phase 6+: 偏离检测 — 检查已执行工具是否有与意图不相关的
+        intent = getattr(self, "_current_intent", None)
+        if intent and intent.primary_intent and recent_actions:
+            from src.core.prompts import INTENT_EXCLUSIVE_TOOLS, INTENT_TOOL_MAPPING
+            excludes = INTENT_EXCLUSIVE_TOOLS.get(intent.primary_intent, {}).get("exclude", [])
+            irrelevant = [a for a in recent_actions if a.split(".")[0] in excludes]
+            if irrelevant:
+                status_lines.append(f"\n⚠️ [偏离警告] 检测到与任务无关的操作：{'、'.join(irrelevant[-3:])}")
+                recommended_tools = INTENT_TOOL_MAPPING.get(intent.primary_intent, [])
+                if recommended_tools:
+                    status_lines.append(f"必须立即回到任务主线，使用推荐工具：{', '.join(recommended_tools)}")
+                status_lines.append("禁止再调用与任务无关的工具！")
         
         # 根据状态给出不同的指引
         if consecutive_failures >= 2:
@@ -435,6 +462,129 @@ class Agent:
             status_lines.append("\n请按计划推进任务。")
         
         return "\n".join(status_lines)
+
+    def _build_tool_summary(self) -> str:
+        """从工具注册表生成摘要清单（LLM 模式使用，初始化时调用一次）。"""
+        from src.core.prompts import build_tool_summary
+        return build_tool_summary(self.tool_registry)
+
+    async def _detect_intent_with_llm(self, user_input: str) -> IntentResult:
+        """使用轻量 LLM 进行意图识别和工具推荐。
+
+        调用低成本模型分析用户请求，返回推荐工具和禁用工具列表，
+        结果写入 IntentResult 的扩展字段供后续前置验证和 Schema 标注使用。
+        """
+        from src.core.prompts import LLM_TOOL_CLASSIFY_PROMPT
+
+        # 确保工具摘要已缓存
+        if not self._tool_summary_cache:
+            self._tool_summary_cache = self._build_tool_summary()
+
+        prompt = LLM_TOOL_CLASSIFY_PROMPT.format(
+            user_input=user_input,
+            tool_summary=self._tool_summary_cache,
+        )
+
+        try:
+            response = await self.model_registry.chat(
+                model_key=self._intent_llm_model,
+                messages=[
+                    {"role": "system", "content": "你是工具选择专家，只输出JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=500,
+            )
+
+            # 解析 LLM 返回的 JSON
+            raw_text = ""
+            if hasattr(response, "choices") and response.choices:
+                raw_text = response.choices[0].message.content.strip()
+
+            # 尝试从返回内容中提取 JSON（可能被 ```json 包裹）
+            json_text = raw_text
+            if "```" in json_text:
+                # 提取 ``` 之间的内容
+                import re
+                match = re.search(r"```(?:json)?\s*(.*?)```", json_text, re.DOTALL)
+                if match:
+                    json_text = match.group(1).strip()
+
+            classify_result = json.loads(json_text)
+
+            recommended = classify_result.get("recommended_tools", [])
+            forbidden = classify_result.get("forbidden_tools", [])
+            task_type = classify_result.get("task_type", "")
+            execution_plan = classify_result.get("execution_plan", "")
+
+            logger.info(
+                "LLM 意图识别完成: task_type=%s, recommended=%s, forbidden=%s",
+                task_type, recommended, forbidden,
+            )
+
+            # 同时运行规则引擎以获取基础意图信息（用于 prompt 模块注入等向后兼容逻辑）
+            rule_result = detect_intent_with_confidence(user_input)
+
+            return IntentResult(
+                intents=rule_result.intents,
+                confidence=0.9,  # LLM 模式给予较高置信度
+                primary_intent=rule_result.primary_intent or task_type,
+                matched_keywords=rule_result.matched_keywords,
+                scores=rule_result.scores,
+                prompt_modules=rule_result.prompt_modules,
+                llm_recommended_tools=recommended,
+                llm_forbidden_tools=forbidden,
+                llm_execution_plan=execution_plan,
+            )
+
+        except Exception as e:
+            logger.warning("LLM 意图识别失败，降级到规则引擎: %s", e)
+            # 降级到规则引擎
+            return detect_intent_with_confidence(user_input)
+
+    def _validate_tool_relevance(
+        self,
+        tool_name: str,
+        action_name: str,
+    ) -> tuple[bool, str]:
+        """验证工具调用是否与用户请求相关（两种模式共用的安全网）。
+
+        规则模式：基于 INTENT_EXCLUSIVE_TOOLS 互斥关系验证。
+        LLM 模式：基于 LLM 返回的 forbidden_tools 验证。
+
+        Returns:
+            (is_relevant, reject_reason)  — 通过则 (True, "")，拒绝则 (False, 原因)
+        """
+        # 核心工具始终放行
+        if tool_name in {"shell", "file", "screen", "search", "tool_info"}:
+            return True, ""
+
+        intent = getattr(self, "_current_intent", None)
+        if intent is None:
+            return True, ""
+
+        if self._intent_mode == "llm":
+            # LLM 模式：基于 LLM 返回的 forbidden_tools 验证
+            if tool_name in intent.llm_forbidden_tools:
+                recommended = ", ".join(intent.llm_recommended_tools) if intent.llm_recommended_tools else "请根据任务选择合适工具"
+                return False, (
+                    f"[工具调用被拒绝] {tool_name}.{action_name} 被标记为与当前任务无关。\n"
+                    f"推荐使用：{recommended}"
+                )
+            return True, ""
+        else:
+            # 规则模式：基于意图互斥关系验证
+            primary = intent.primary_intent
+            if not primary:
+                return True, ""
+            excludes = INTENT_EXCLUSIVE_TOOLS.get(primary, {}).get("exclude", [])
+            if tool_name in excludes:
+                recommended_tools = INTENT_TOOL_MAPPING.get(primary, [])
+                recommended = ", ".join(recommended_tools) if recommended_tools else "请根据任务选择合适工具"
+                return False, (
+                    f"[工具调用被拒绝] {tool_name}.{action_name} 与 {primary} 任务无关。\n"
+                    f"推荐使用：{recommended}"
+                )
+            return True, ""
     
     async def cleanup(self) -> None:
         """清理 Agent 资源（包括意识系统）。"""
@@ -579,9 +729,15 @@ class Agent:
             "session_id": session_id,
         })
 
-        # Phase 6: 增强意图识别 + 渐进式工具暴露
-        intent_result = detect_intent_with_confidence(user_input)
+        # Phase 6+: 意图识别（双模式分发）
+        if self._intent_mode == "llm":
+            intent_result = await self._detect_intent_with_llm(user_input)
+        else:
+            intent_result = detect_intent_with_confidence(user_input)
         self.tool_exposure.reset()  # 新对话重置暴露策略状态
+
+        # 保存当前意图结果，供前置验证使用
+        self._current_intent = intent_result
 
         # 获取工具 schema（通过暴露引擎分层过滤 + 标注）
         tools = self.tool_exposure.get_schemas(intent_result)
@@ -608,7 +764,18 @@ class Agent:
 
         # 动态构建 System Prompt（使用增强版意图结果）
         dynamic_system_prompt = build_system_prompt_from_intent(intent_result)
-        
+
+        # Phase 6+: LLM 模式下注入推荐/禁用工具信息到 System Prompt
+        if self._intent_mode == "llm" and intent_result.llm_recommended_tools:
+            llm_guide = "\n\n【LLM 工具选择指引】\n"
+            llm_guide += f"推荐工具：{', '.join(intent_result.llm_recommended_tools)}\n"
+            if intent_result.llm_forbidden_tools:
+                llm_guide += f"禁用工具（与当前任务无关）：{', '.join(intent_result.llm_forbidden_tools)}\n"
+            if intent_result.llm_execution_plan:
+                llm_guide += f"建议执行步骤：{intent_result.llm_execution_plan}\n"
+            llm_guide += "请严格按照推荐工具完成任务，禁止调用禁用列表中的工具。\n"
+            dynamic_system_prompt += llm_guide
+
         # Phase 6+: 注入意识系统上下文
         if self.consciousness and self.consciousness.is_running:
             try:
@@ -639,8 +806,8 @@ class Agent:
                 max_tokens=model_cfg.context_window,
             )
 
-            # 任务锚定机制：智能锚定，根据执行状态动态调整（Phase 6+ 增强：防重复执行）
-            if step_idx >= 3 and step_idx % 3 == 0:
+            # 任务锚定机制：智能锚定，根据执行状态动态调整（Phase 6+ 增强：更早更频繁）
+            if step_idx >= 1 and step_idx % 2 == 0:
                 # 获取执行状态摘要
                 tracker_status = self._execution_tracker.get_status_summary()
                 
@@ -918,6 +1085,21 @@ class Agent:
                         tool_call_id=tc.id,
                         content=result_msg,
                     )
+                    continue
+
+                # Phase 6+: 工具调用前置验证（双模式共用安全网）
+                is_relevant, reject_reason = self._validate_tool_relevance(tool_name, action_name)
+                if not is_relevant:
+                    logger.warning(
+                        "工具调用被前置验证拒绝: %s.%s (mode=%s)",
+                        tool_name, action_name, self._intent_mode,
+                    )
+                    self.session_manager.add_tool_message(
+                        tool_call_id=tc.id,
+                        content=reject_reason,
+                    )
+                    # 报告偏离（触发偏离收敛策略）
+                    self.tool_exposure.report_deviation()
                     continue
             
                 # 发布工具调用事件
@@ -1209,8 +1391,8 @@ class Agent:
                 max_tokens=model_cfg.context_window,
             )
 
-            # 任务锚定机制：智能锚定，根据执行状态动态调整（Phase 6+ 增强：防重复执行）
-            if step_idx >= 3 and step_idx % 3 == 0:
+            # 任务锚定机制：智能锚定，根据执行状态动态调整（Phase 6+ 增强：更早更频繁）
+            if step_idx >= 1 and step_idx % 2 == 0:
                 # 获取执行状态摘要
                 tracker_status = self._execution_tracker.get_status_summary()
                 

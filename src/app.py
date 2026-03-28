@@ -222,10 +222,31 @@ async def run_cli() -> None:
     if model_registry.get(default_key) is None:
         default_key = models[0].key
 
+    # 加载意图识别模式配置
+    _intent_mode = "rule"
+    _intent_llm_model = "deepseek-chat"
+    try:
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+        from pathlib import Path as _Path
+        _cfg_path = _Path(__file__).parent.parent / "config" / "default.toml"
+        if _cfg_path.exists():
+            with open(_cfg_path, "rb") as _f:
+                _cfg = tomllib.load(_f)
+            _tool_opt = _cfg.get("agent", {}).get("tool_optimization", {})
+            _intent_mode = _tool_opt.get("intent_mode", "rule")
+            _intent_llm_model = _tool_opt.get("intent_llm_model", "deepseek-chat")
+    except Exception:
+        pass
+
     agent = Agent(
         model_registry=model_registry,
         tool_registry=tool_registry,
         model_key=default_key,
+        intent_mode=_intent_mode,
+        intent_llm_model=_intent_llm_model,
     )
 
     model_cfg = model_registry.get(default_key)

@@ -60,6 +60,10 @@ enable_schema_annotation = true
 failures_to_upgrade = 2
 # 模型辅助意图识别开关（仅在关键词匹配置信度极低时触发，默认关闭）
 enable_model_intent_classification = false
+# 意图识别模式："rule"=规则引擎(快速零成本) / "llm"=LLM智能分析(精准,有延迟和成本)
+intent_mode = "rule"
+# LLM 智能模式使用的分类模型（建议低成本快速模型）
+intent_llm_model = "deepseek-chat"
 
 # Phase 6: 全链路追踪配置
 [agent.trace]

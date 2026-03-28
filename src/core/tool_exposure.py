@@ -34,7 +34,7 @@ def annotate_schema_priority(
 ) -> list[dict[str, Any]]:
     """根据意图在 Schema description 前添加优先级标注。
 
-    不删除任何工具，只在 description 前添加 [推荐] / [备选] 前缀，
+    不删除任何工具，只在 description 前添加 [推荐] / [备选] / [禁用] 前缀，
     引导模型优先选择相关工具。
 
     Args:
@@ -44,6 +44,34 @@ def annotate_schema_priority(
     Returns:
         标注后的 schema 列表（深拷贝，不修改原始数据）
     """
+    # Phase 6+: LLM 模式优先使用 LLM 返回的推荐/禁用信息
+    llm_recommended = set()
+    llm_forbidden = set()
+    if hasattr(intent_result, 'llm_recommended_tools'):
+        llm_recommended = set(intent_result.llm_recommended_tools or [])
+        llm_forbidden = set(intent_result.llm_forbidden_tools or [])
+
+    if llm_recommended or llm_forbidden:
+        # LLM 模式标注
+        annotated: list[dict[str, Any]] = []
+        for schema in schemas:
+            func_info = schema.get("function", {})
+            func_name = func_info.get("name", "")
+            tool_name = _extract_tool_name(func_name)
+
+            if tool_name in llm_recommended:
+                schema = copy.deepcopy(schema)
+                desc = schema["function"].get("description", "")
+                schema["function"]["description"] = f"[推荐] {desc}"
+            elif tool_name in llm_forbidden:
+                schema = copy.deepcopy(schema)
+                desc = schema["function"].get("description", "")
+                schema["function"]["description"] = f"[禁用] {desc}"
+
+            annotated.append(schema)
+        return annotated
+
+    # 规则模式标注（原有逻辑）
     # 支持对象和字典两种格式
     if hasattr(intent_result, 'primary_intent'):
         primary_intent = intent_result.primary_intent
@@ -174,6 +202,7 @@ class ToolExposureEngine:
         # 运行时状态（每次对话重置）
         self._consecutive_failures: int = 0
         self._forced_tier: str | None = None  # 被强制升级的层级
+        self._deviation_count: int = 0  # 工具调用偏离次数（被前置验证拒绝）
 
     # ------------------------------------------------------------------
     # 公开 API
@@ -228,10 +257,26 @@ class ToolExposureEngine:
         """报告工具调用成功，重置连续失败计数。"""
         self._consecutive_failures = 0
 
+    def report_deviation(self) -> None:
+        """报告一次工具调用偏离（被前置验证拒绝）。
+
+        连续偏离 >= 2 次时，强制收敛到推荐集，防止模型继续发散。
+        偏离收敛优先级 > 失败升级优先级。
+        """
+        self._deviation_count += 1
+        if self._deviation_count >= 2:
+            # 强制收敛到推荐集
+            self._forced_tier = self.TIER_RECOMMENDED
+            logger.warning(
+                "连续偏离 %d 次，工具集强制收敛到推荐集",
+                self._deviation_count,
+            )
+
     def reset(self) -> None:
         """重置状态（新对话开始时调用）。"""
         self._consecutive_failures = 0
         self._forced_tier = None
+        self._deviation_count = 0
 
     @property
     def current_tier(self) -> str:
