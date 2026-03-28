@@ -703,7 +703,8 @@
         "risk_level": "low",
         "require_confirmation": false
       },
-      "actions": ["generate_ppt", "add_slide", "export_pdf", "add_chart_slide", "add_table_slide", "add_section_divider"]
+      "system_prompt": "当用户请求生成PPT时，请按以下格式输出 slides_config JSON：\n\n### slides_config 格式\n```json\n[\n  {\n    \"type\": \"title\",\n    \"title\": \"PPT标题\",\n    \"subtitle\": \"副标题（可选）\"\n  },\n  {\n    \"type\": \"section\",\n    \"title\": \"章节名称\",\n    \"section_number\": 1\n  },\n  {\n    \"type\": \"content\",\n    \"title\": \"页面标题\",\n    \"content\": [\"要点1 - 描述\", \"要点2 - 描述\", \"要点3 - 描述\"],\n    \"layout\": \"single\",\n    \"image_prompt\": \"配图描述，例如：现代办公室场景，简洁风格\"\n  },\n  {\n    \"type\": \"chart\",\n    \"title\": \"图表标题\",\n    \"chart\": {\n      \"type\": \"bar\",\n      \"labels\": [\"类别A\", \"类别B\", \"类别C\"],\n      \"values\": [65, 80, 45]\n    }\n  },\n  {\n    \"type\": \"table\",\n    \"title\": \"表格标题\",\n    \"table\": {\n      \"headers\": [\"项目\", \"指标1\", \"指标2\"],\n      \"rows\": [[\"A\", \"10\", \"20\"], [\"B\", \"30\", \"40\"]]\n    }\n  },\n  {\n    \"type\": \"thank\"\n  }\n]\n```\n\n### 生成规则\n1. **结构**：标题页 → 目录 → 分章节内容 → 总结 → 感谢页\n2. **配图**：每3-4页内容至少1页配图\n3. **图表**：数据相关内容使用图表展示\n4. **布局**：单栏/双栏/左图右文/右图左文 交替使用\n5. **内容深度**：每个要点应包含具体描述，不只是标题\n6. **数量**：建议8-12页为宜\n\n### 布局类型\n- `single`: 单栏文字（默认）\n- `double`: 双栏文字\n- `left_img`: 左图右文\n- `right_img`: 右图左文\n\n### 图表类型\n- `bar`: 柱状图（比较数据）\n- `line`: 折线图（趋势数据）\n- `pie`: 饼图（占比数据）",
+      "actions": ["generate_rich_ppt", "generate_ppt", "add_slide", "export_pdf", "add_chart_slide", "add_table_slide", "add_section_divider"]
     },
     "image_generator": {
       "enabled": true,

@@ -112,6 +112,21 @@ class PDFGenerationOptions:
     enable_hyperlinks: bool = True
     prefer_css_page_size: bool = False
 
+    def __post_init__(self):
+        """兼容 margins 参数。"""
+        # 如果传入了 margins 字典，拆分到四个边距
+        if hasattr(self, 'margins') and isinstance(self.margins, dict):
+            if 'top' in self.margins:
+                self.margin_top = str(self.margins['top'])
+            if 'bottom' in self.margins:
+                self.margin_bottom = str(self.margins['bottom'])
+            if 'left' in self.margins:
+                self.margin_left = str(self.margins['left'])
+            if 'right' in self.margins:
+                self.margin_right = str(self.margins['right'])
+            # 移除 margins 属性避免后续问题
+            delattr(self, 'margins')
+
 
 class PDFGeneratorTool(BaseTool):
     """PDF 生成工具。
@@ -162,7 +177,7 @@ class PDFGeneratorTool(BaseTool):
                     },
                     "options": {
                         "type": "object",
-                        "description": "生成选项（page_size, margins, include_page_numbers 等）",
+                        "description": "生成选项（page_size, margin_top/bottom/left/right, include_page_numbers 等）",
                     },
                 },
                 required_params=["html_content"],
