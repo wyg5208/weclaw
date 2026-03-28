@@ -154,6 +154,25 @@ CORE_SYSTEM_PROMPT = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面
      - document_scanner.query_history：查询历史记录
    - 缓存机制：首次解析约 30-60 秒，后续相同文件<1 秒直接返回
 
+7. **music_player** - 本地歌曲库播放器
+   - 使用场景：播放本地歌曲、管理播放列表、歌曲库浏览
+   - **【重要】用户说"播放歌曲/音乐"、"听歌"、"放一首"、"歌曲库"时，必须优先使用 music_player！禁止使用 search 去搜索播放链接！**
+   - 常用 actions：
+     - music_player.play_song：播放指定歌曲（支持 title/artist 模糊匹配）
+     - music_player.search_songs：搜索歌曲库（按名称/标签/艺术家）
+     - music_player.list_songs：列出所有歌曲
+     - music_player.pause_song / resume_song / stop_song：播放控制
+     - music_player.next_song / previous_song：切歌
+     - music_player.scan_local_music：扫描本地音乐目录导入歌曲
+   - 注意：如果搜索结果为空，说明歌曲未在本地库中，可提示用户先用 scan_local_music 导入
+
+【选择决策树（语音/音乐相关）】
+- 用户要播放歌曲/音乐？→ music_player.play_song（禁止用 search！）
+- 用户要搜索歌曲库？→ music_player.search_songs
+- 用户要暂停/继续/切歌？→ music_player.pause_song / resume_song / next_song
+- 用户要导入本地音乐？→ music_player.scan_local_music
+- 用户要录制语音/识别音频？→ voice_input / speech_to_text
+
 【专业文档工具选择指南】
 当用户需要生成合同、简历等专业文档时：
 
@@ -191,6 +210,7 @@ CORE_SYSTEM_PROMPT = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面
    - 使用场景：解析单张试卷/作业图片、获取详细解答
    - 特点：GLM-4.6V 视觉模型、包含缓存机制
    - 参数：file_path（文件路径）、subject（科目）、grade_level（年级）
+   - ❌ 禁止用于：课程表、时间表、课表等表格（请使用 ocr.recognize_file）
 
 2. **document_scanner.scan_folder** - 批量文件夹扫描
    - 使用场景：批量处理多张图片、增量更新
@@ -212,6 +232,98 @@ CORE_SYSTEM_PROMPT = """你是 WeClaw，一个运行在 Windows 上的 AI 桌面
 - 文本文件 (.txt/.md/.csv/.json 等)：可使用 file.read 读取内容
 - 代码文件 (.py/.js/.java 等)：可使用 file.read 读取代码
 - 如用户未明确指定处理方式，可以询问用户想要如何处理
+
+【OCR工具精细选择指南】（Phase 1.1 增强）
+当用户需要处理图片中的文字、文档解析、视觉识别等任务时：
+
+## 场景1：纯文字提取（无语义理解需求）
+用户请求特征：
+- "识别这张图片的文字"
+- "提取截图中的内容"
+- "把图片转成文字"
+- "OCR识别一下"
+
+推荐工具：ocr.recognize_file
+- 特点：本地快速处理（0.5-2s），无需API费用，隐私保护
+- 适用：印刷体、截图、清晰文档
+- 注意：无法理解语义内容，仅提取文字
+
+## 场景2：教育场景解析（需要理解和解答）
+用户请求特征：
+- "帮我解答这道题"
+- "解析这份试卷"
+- "批改这个作业"
+- "看看这道数学题怎么做"
+
+推荐工具：document_scanner.scan_file
+- 特点：GLM-4.6V 视觉模型，语义理解+详细解答
+- 参数推断：
+  - subject（科目）：根据图片内容推断，默认"数学"
+  - grade_level（年级）：根据题目难度推断，默认"高中"
+- 注意：需要网络连接，响应较慢（5-15s）
+
+## 场景3：食谱/菜单解析（结构化输出需求）
+用户请求特征：
+- "识别这张食谱"
+- "把菜单转成数据"
+- "解析学校食谱图片"
+
+推荐工具：meal_menu.parse_from_image
+- 特点：GLM-4.6V-Flash 视觉模型，结构化JSON输出
+- 注意：需要网络连接，响应较快（2-5s）
+
+## 场景4：PDF文档处理
+用户请求特征：
+- "解析这个PDF"
+- "PDF里有什么内容"
+- "提取PDF里的文字"
+
+推荐工具：
+- 需要解答和分析 → study_solver.solve_pdf
+- 仅需读取内容 → file.read
+
+## 场景5：课程表/时间表解析（最高优先级场景！）
+用户请求特征：
+- "解析课程表"
+- "识别这张课程表"
+- "提取课程表内容"
+- "解析课程表图片"
+- "识别学校课程表"
+- "这是什么课表"
+
+【强制规则】课程表识别必须使用 ocr.recognize_file！
+- ❌ 绝对禁止使用 document_scanner.scan_file（这是试卷解析工具！）
+- ❌ 绝对禁止使用 meal_menu.parse_from_image
+- ✅ 必须使用 ocr.recognize_file 提取文字
+- 原因：课程表是表格结构，document_scanner 会生成问答，错误地把它当试卷处理
+
+⚠️ 常见错误：AI 经常错误地使用 document_scanner 来处理课程表，导致识别失败！
+
+## 场景6：微信聊天识别
+用户请求特征：
+- "识别微信聊天列表"
+- "读取聊天记录"
+
+推荐处理：微信相关操作走内部 wechat_core 模块
+
+## 隐私敏感场景（最高优先级）
+用户请求特征：
+- "识别这个密码截图"
+- "识别银行卡信息"
+- 任何涉及隐私信息的请求
+
+必须使用：ocr.recognize_file
+- 原因：本地处理，数据不上传云端，完全隐私保护
+
+## OCR 技术模型选择汇总（Phase 1.2 模型统一）
+
+| 场景 | 推荐技术 | 模型 | 延迟 | 成本 | 适用情况 |
+|------|----------|------|------|------|----------|
+| 纯文字提取 | OCRTool | RapidOCR (本地) | 0.5-2s | 免费 | 印刷体、截图、隐私内容 |
+| 试卷解析 | DocumentScanner | GLM-4.6V | 5-15s | 按量计费 | 需要语义理解、详细解答 |
+| 食谱识别 | MealMenu | GLM-4.6V-Flash | 2-5s | 按量计费 | 结构化JSON输出 |
+| PDF文字提取 | StudySolver/File | PyMuPDF4LLM (本地) | 0.1-1s | 免费 | 文本型PDF |
+| 复杂理解 | 视情况 | GLM-4.6V | 5-15s | 按量计费 | 手写、公式、复杂排版 |
 
 【定时任务工具选择指南】
 当用户要求创建定时提醒、定时通知、定时执行复杂任务时：
@@ -551,6 +663,7 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         "歌曲", "音乐", "播放", "听歌", "听音乐", "歌单", "播放列表",
         "暂停", "切歌", "下一首", "上一首", "循环播放", "随机播放",
         "轻音乐", "古典音乐", "纯音乐", "钢琴曲",
+        "歌曲库", "音乐库", "本地音乐", "放歌", "放一首", "播放歌曲",
     ],
     # ==================== 新增7个意图维度 ====================
     "document_processing": [

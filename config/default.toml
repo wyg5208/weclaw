@@ -6,7 +6,7 @@ version = "2.7.1"
 log_level = "INFO"
 data_dir = "~/.weclaw"
 language = ""
-theme = "deep_brown"
+theme = "light"
 
 [logging]
 # 日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL

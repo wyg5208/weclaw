@@ -1242,6 +1242,13 @@ class Agent:
                 collected_content = ""
                 collected_tool_calls: list[dict] = []
                 last_usage = None
+
+                # DSML 乱码过滤：DeepSeek 模型有时会在 content 字段输出其原生工具调用标记
+                # （如 <｜DSML｜function_calls>），这些标记会在 tool_calls 中重复，
+                # 若不过滤则会显示为乱码文本并被 TTS 朗读。
+                _dsml_started = False
+                # DeepSeek 原生工具调用标记（fullwidth vertical line U+FF5C）
+                _DSML_MARKERS = ("<｜DSML｜", "<｜tool▁calls▁begin｜>", "<|DSML|", "<|tool_calls_begin|>")
             
                 # 使用超时包装器处理流
                 # 本地 Ollama 模型可能需要更长时间，使用更长的超时
@@ -1276,11 +1283,25 @@ class Agent:
                             session_id=session_id,
                         ))
 
-                    # 收集文本内容
+                    # 收集文本内容（过滤 DSML 标记）
                     delta_content = getattr(delta, "content", None) or ""
-                    if delta_content:
-                        collected_content += delta_content
-                        yield delta_content  # 实时 yield 文本片段
+                    if delta_content and not _dsml_started:
+                        # 检测 DeepSeek 原生工具调用标记是否混入 content 字段
+                        dsml_pos = -1
+                        for _marker in _DSML_MARKERS:
+                            _pos = delta_content.find(_marker)
+                            if _pos >= 0 and (dsml_pos < 0 or _pos < dsml_pos):
+                                dsml_pos = _pos
+                        if dsml_pos >= 0:
+                            # 截断至标记前的正常文本，后续 content 不再 yield
+                            delta_content = delta_content[:dsml_pos].rstrip()
+                            _dsml_started = True
+                            logger.debug(
+                                "[DSML过滤] 检测到原生工具调用标记，截断 content 输出"
+                            )
+                        if delta_content:
+                            collected_content += delta_content
+                            yield delta_content  # 实时 yield 文本片段
 
                     # 收集 tool_calls（增量拼接）
                     delta_tool_calls = getattr(delta, "tool_calls", None)
@@ -1958,6 +1979,20 @@ class Agent:
                 executed_tools,
             )
 
+            # --- 生成整合型跟进回复 ---
+            # 将工具结果整合为口语化回复，用于展示到聊天区并 TTS 播报给用户。
+            followup_text = await self._generate_deferred_followup(
+                user_input=user_input,
+                fast_reply=fast_reply,
+                tool_results=result_parts,
+                session_id=session_id,
+            )
+
+            # 将跟进回复写入 session（作为正式的 assistant 消息，保持对话连贯性）
+            if followup_text:
+                self.session_manager.add_assistant_message(followup_text)
+                logger.info("[CFTA-deferred] 跟进回复已写入 session")
+
             # 发布异步工具结果事件
             await self.event_bus.emit(
                 EventType.DEFERRED_TOOL_RESULT,
@@ -1971,7 +2006,100 @@ class Agent:
             logger.info(
                 "[CFTA-deferred] 异步工具执行完成: %s", executed_tools,
             )
-            return summary
+            return summary, followup_text
+
+    async def _generate_deferred_followup(
+        self,
+        user_input: str,
+        fast_reply: str,
+        tool_results: list[str],
+        session_id: str,
+    ) -> str:
+        """CFTA: 将工具执行结果整合为简洁的口语化跟进回复。
+
+        在后台工具执行完成后调用，使用轻量模型将工具结果
+        整合成简洁的口语化回复，用于展示在聊天区并通过 TTS 朗读。
+
+        Args:
+            user_input: 原始用户输入
+            fast_reply: Phase 1 的快速聊天回复
+            tool_results: 工具执行结果列表（每个元素为 "tool.action: 结果" 格式）
+            session_id: 会话 ID
+
+        Returns:
+            整合后的口语化回复文本，失败则返回空字符串
+        """
+        if not tool_results:
+            return ""
+
+        tool_results_text = "\n".join(tool_results)
+
+        followup_system = (
+            "你是语音助手 WeClaw。用户已收到快速聊天回复，现在工具查询结果出来了。\n"
+            "请根据工具查询结果，给出简洁、口语化的补充告知。\n\n"
+            "规则：\n"
+            "- 控制在 60 字以内\n"
+            "- 直接说重点信息，不要重复快速回复中已说过的内容\n"
+            "- 口语化、自然流畅，适合 TTS 朗读\n"
+            "- 不要加 Markdown 格式、表情符号、中括号标记\n"
+            "- 如果工具结果是天气，直接报告天气信息（温度、天气状况、是否带伞等）\n"
+            "- 如果工具结果是错误，礼貌告知查询失败\n"
+        )
+
+        followup_messages = [
+            {"role": "system", "content": followup_system},
+            {"role": "user", "content": user_input},
+            {"role": "assistant", "content": fast_reply},
+            {
+                "role": "user",
+                "content": (
+                    f"刚才的工具查询结果如下：\n{tool_results_text}\n\n"
+                    "请简洁地将查询结果告知用户（60字以内，口语化）。"
+                ),
+            },
+        ]
+
+        try:
+            # 使用轻量模型，不需要工具调用
+            light_model_cfg = self.model_selector.select_for_task(
+                needs_function_calling=False,
+                model_key=self.model_key,
+            )
+
+            logger.info("[CFTA-followup] 生成整合回复: model=%s", light_model_cfg.key)
+
+            response = await asyncio.wait_for(
+                self.model_registry.chat(
+                    model_key=light_model_cfg.key,
+                    messages=followup_messages,
+                ),
+                timeout=15.0,  # 跟进回复不能太慢
+            )
+
+            followup = getattr(response.choices[0].message, "content", "") or ""
+            followup = followup.strip()
+
+            # 安全截断，避免超长
+            if len(followup) > 200:
+                followup = followup[:200].rstrip() + "…"
+
+            # 记录用量
+            usage = getattr(response, "usage", None)
+            if usage:
+                tokens = getattr(usage, "total_tokens", 0)
+                self.session_manager.update_tokens(tokens)
+
+            logger.info("[CFTA-followup] 整合回复生成完成: %s", followup[:60])
+            return followup
+
+        except asyncio.TimeoutError:
+            logger.warning("[CFTA-followup] 整合回复生成超时（>15s），跳过")
+            return ""
+        except asyncio.CancelledError:
+            raise  # 传播取消信号
+        except Exception as e:
+            logger.error("[CFTA-followup] 整合回复生成失败: %s", e)
+            return ""
 
     def cancel_deferred_tools(self) -> None:
         """CFTA: 取消正在进行的后台工具任务。

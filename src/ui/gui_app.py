@@ -67,7 +67,8 @@ class GuiAgent(QObject):
     reasoning_finished = Signal()  # 思考过程完成
     cron_job_status = Signal(str, str, str)  # (job_id, status, description) 定时任务状态
     companion_care_message = Signal(str, str)  # (message, interaction_type) 陪伴消息
-    deferred_tool_result = Signal(str)  # CFTA: 后台工具执行结果摘要
+    deferred_tool_result = Signal(str)  # CFTA: 后台工具执行结果摘要（工具日志用）
+    deferred_tool_followup = Signal(str)  # CFTA: 工具结果整合回复（聊天区 + TTS 用）
     deferred_tool_started = Signal()  # CFTA: 后台工具开始执行
     cfta_activation_requested = Signal()  # 英语对话：请求激活持续对话模式
     voice_transcription = Signal(str)  # 实时语音转录结果（用于更新输入框）
@@ -391,7 +392,12 @@ class GuiAgent(QObject):
                 message, fast_reply, session_id,
             )
             if result:
-                self.deferred_tool_result.emit(result)
+                summary, followup_text = result
+                # 工具日志记录原始摘要
+                self.deferred_tool_result.emit(summary)
+                # 如有整合回复，推送到聊天区 + TTS
+                if followup_text:
+                    self.deferred_tool_followup.emit(followup_text)
                 logger.info("[CFTA] 异步工具完成，结果已推送到 UI")
         except asyncio.CancelledError:
             logger.info("[CFTA] 异步工具任务被取消")
@@ -910,6 +916,7 @@ class WinClawGuiApp:
             lambda: safe_add_tool_log("🔄 后台检测工具需求中...")
         )
         self._gui_agent.deferred_tool_result.connect(self._on_deferred_tool_result)
+        self._gui_agent.deferred_tool_followup.connect(self._on_deferred_tool_followup)
         
         # 英语对话：自动激活持续对话模式
         self._gui_agent.cfta_activation_requested.connect(self._on_activate_cfta)
@@ -2260,17 +2267,38 @@ class WinClawGuiApp:
         logger.info("陪伴消息已显示: %s", message[:50])
 
     def _on_deferred_tool_result(self, result_summary: str) -> None:
-        """CFTA: 后台工具执行结果处理。
+        """CFTA: 后台工具执行原始结果处理（仅工具日志）。
 
         不再作为独立 AI 消息显示到聊天区域（避免与快速回复重复），
         仅在工具日志面板记录执行结果。
-        不触发 TTS 播放（快速回复已提供语音回答）。
+        TTS 播报由 _on_deferred_tool_followup 统一负责。
         """
         if not self._window:
             return
         # 仅在工具日志中记录，不显示为独立的 AI 消息
         self._window.add_tool_log(f"✅ 后台工具完成: {result_summary[:80]}")
         logger.info("[CFTA] 后台工具结果已记录到工具日志（不重复显示到聊天区域）")
+
+    def _on_deferred_tool_followup(self, followup_text: str) -> None:
+        """CFTA: 工具整合回复 — 展示到聊天区域并通过 TTS 播报给用户。
+
+        这是 CFTA 路径2 的"闭环"：
+        1. 快速聊天（Path 1/2）先给出即时回复
+        2. 后台工具异步执行（如天气查询、歌曲播放）
+        3. 本方法将工具结果整合成口语回复，补充告知用户
+        """
+        if not self._window or not followup_text:
+            return
+
+        # 显示为新的 AI 消息（补充告知）
+        self._window._chat_widget.add_ai_message(followup_text)
+        self._window.add_tool_log(f"💬 工具结果已整合回复: {followup_text[:60]}")
+
+        # TTS 播报整合回复（若 TTS 已开启）
+        if self._tts_enabled:
+            self._on_tts_speak(followup_text)
+
+        logger.info("[CFTA] 工具整合回复已推送到聊天区和 TTS: %s…", followup_text[:40])
 
     def _on_activate_cfta(self) -> None:
         """英语对话：自动激活持续对话模式。"""

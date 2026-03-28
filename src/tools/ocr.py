@@ -67,7 +67,19 @@ class OCRTool(BaseTool):
     def __init__(self):
         super().__init__()
         self._ocr_engine = None
+        self._cache = None  # Phase 2: 延迟初始化缓存
         # 不在初始化时检查依赖，延迟到实际使用时
+
+    def _get_cache(self):
+        """延迟加载缓存管理器（Phase 2）"""
+        if self._cache is None:
+            try:
+                from src.core.cache.file_cache import FileCacheManager
+                self._cache = FileCacheManager()
+            except ImportError:
+                logger.warning("缓存管理器不可用，跳过缓存")
+                self._cache = False
+        return self._cache if self._cache else None
 
     def _check_available(self) -> bool:
         """检查 OCR 功能是否可用。"""
@@ -165,7 +177,7 @@ class OCRTool(BaseTool):
             )
 
     async def _recognize_file(self, image_path: str, merge_lines: bool = True) -> ToolResult:
-        """识别整个图片的文字"""
+        """识别整个图片的文字（Phase 2 增强：支持缓存）"""
         try:
             path = Path(image_path).expanduser().resolve()
             if not path.exists():
@@ -177,6 +189,23 @@ class OCRTool(BaseTool):
                 return ToolResult(
                     status=ToolResultStatus.ERROR, error=f"图片过大: {file_size_mb:.1f}MB (限制 20MB)"
                 )
+
+            # Phase 2: 尝试从缓存获取
+            cache = self._get_cache()
+            file_hash = FileCacheManager.compute_hash(str(path)) if cache else None
+            cached = None
+            if cache and file_hash:
+                cached = await cache.get(file_hash, "ocr")
+                if cached:
+                    logger.info(f"OCR缓存命中: {path.name}")
+                    full_text = cached.get("text", "")
+                    boxes = cached.get("boxes", [])
+                    output = f"识别成功(缓存): {len(boxes)} 行文字\n\n{full_text}"
+                    return ToolResult(
+                        status=ToolResultStatus.SUCCESS,
+                        output=output,
+                        data={"text": full_text, "boxes": boxes, "line_count": len(boxes), "cached": True},
+                    )
 
             # 在线程池中执行 OCR
             loop = asyncio.get_event_loop()
@@ -208,6 +237,10 @@ class OCRTool(BaseTool):
 
             # output 包含完整识别文字，便于 AI 模型直接使用
             output = f"识别成功: {len(text_lines)} 行文字\n\n{full_text}"
+
+            # Phase 2: 保存到缓存
+            if cache and file_hash:
+                await cache.set(file_hash, "ocr", {"text": full_text, "boxes": boxes})
 
             return ToolResult(
                 status=ToolResultStatus.SUCCESS,

@@ -2,8 +2,8 @@
 
 > 你的随身 AI 桌面管家 - 51+ 工具 + 移动端远程控制
 
-**版本**: v2.24.0  
-**更新日期**: 2026 年 3 月 27 日
+**版本**: v2.26.0  
+**更新日期**: 2026 年 3 月 28 日
 
 Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**身材小巧**（仅 Python 环境即可运行），但**内含 51+ 实用工具**，从文件管理、浏览器自动化到语音交互 OCR 识别样样精通。
 
@@ -472,6 +472,67 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 ## 版本日志
 
+## 最新版本 (v2.26.0)
+
+**发布日期**: 2026-03-28
+
+### Bug修复 🐛
+
+#### CFTA 模式 DSML 乱码过滤 🔧
+- ✅ 修复 DeepSeek 模型流式输出时 `<｜DSML｜function_calls>` 等标记渗入聊天文本并被 TTS 朗读的问题
+- ✅ 在 `_chat_stream_impl` 中添加 DSML 标记检测与截断机制，检测到标记立即停止文本输出
+
+### 功能增强 ✨
+
+#### music_player 工具路由强化 🎵
+- ✅ `CORE_SYSTEM_PROMPT` 新增 `music_player` 完整使用指南与强制规则（禁止用 search 代替）
+- ✅ 意图识别新增 6 个关键词：歌曲库、音乐库、本地音乐、放歌、放一首、播放歌曲
+
+### 架构改进 🏗️
+
+#### CFTA 工具结果回路（核心架构改进）
+- ✅ 新增 `_generate_deferred_followup()` 方法：工具执行后用轻量模型将结果整合为 60 字内口语化回复
+- ✅ `process_deferred_tools()` 改为返回 `(summary, followup_text)` 元组
+- ✅ `GuiAgent` 新增 `deferred_tool_followup = Signal(str)` 信号
+- ✅ 新增 `_on_deferred_tool_followup()` 处理函数：工具结果以新 AI 消息显示 + TTS 播报
+- ✅ 打通 CFTA 架构"有执行、无反馈"断路问题，实现请求→执行→反馈完整闭环
+
+### 技术改进 📝
+- 📝 涉及文件：`src/core/agent.py`、`src/core/prompts.py`、`src/ui/gui_app.py`
+- 📝 非 CFTA 模式（标准对话、文本输入、PWA 远程）零影响
+
+---
+
+## 最新版本 (v2.25.0)
+
+**发布日期**: 2026-03-28
+
+### Bug修复 🐛
+
+#### 任务模块深层 Bug 修复 🔧
+- ✅ 修复 `_run_async_safe` UI 回调永不触发问题（qasync 环境下 ThreadPoolExecutor+QTimer 混用导致，改用 create_task）
+- ✅ 修复 `_update_todo_list_ui` / `_update_daily_task_list_ui` 布局清空逻辑（`takeAt(0)` → `takeAt(1)`，防止 `empty_label` 被误删导致卡片堆积）
+- ✅ 修复待办事项默认筛选 `time_frame="week"` 导致大量任务不可见的问题（新增"全部"选项并设为默认，增加智能回退机制）
+
+### 功能增强 ✨
+
+#### 动态 time_frame 计算 🧠
+- ✅ 新增 `compute_time_frame(start_date)` 函数，根据起始日期与当前日期动态计算时间周期
+- ✅ `Todo` 类新增 `get_effective_time_frame()` 方法，优先 `start_date` 推算，无则 fallback 到存储值
+- ✅ `list_todos` 改为 Python 侧动态过滤，替代原 SQL 静态 `time_frame` 字符串匹配
+- ✅ 任务创建/编辑对话框：`start_date` 变更时自动联动更新时间周期下拉框
+
+#### 今日待办自动同步到当日任务 📅
+- ✅ 创建 `time_frame=today` 或 `start_date=今天` 的待办时，自动在当日任务中创建对应记录
+- ✅ 内置去重检查，避免重复生成当日任务条目
+- ✅ 创建成功后 UI 自动刷新当日任务列表
+
+### 技术改进 📝
+- 📝 `_run_async_safe` 改用 `asyncio.run_coroutine_threadsafe` 保障 qasync 线程安全
+- 📝 新增 `_on_start_date_changed` 方法实现日期-时间周期联动
+- 📝 涉及文件：`main_window.py`、`task_card.py`、`task_dialog.py`、`todo_storage.py`、`todo.py`
+
+---
 ## 最新版本 (v2.24.0)
 
 **发布日期**: 2026-03-27
@@ -494,6 +555,25 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 - 📝 优化错误提示：未找到匹配时提供详细建议和示例
 - 📝 完善日志记录：完整记录匹配过程和相似度得分
 - 📝 工具总数：54 个启用工具
+
+---
+### v2.26.0 (2026-03-28)
+- ✅ 修复 CFTA 模式 DSML 乱码：DeepSeek 流式输出工具调用标记不再渗入聊天文本和 TTS
+- ✅ 强化 music_player 工具路由：系统提示新增强制规则 + 意图识别补充 6 个关键词
+- ✅ 打通 CFTA 工具结果回路：新增 `_generate_deferred_followup()` + `deferred_tool_followup` 信号
+- ✅ 实现请求→执行→反馈完整闭环，语音持续对话达到生产级别可用性
+
+---
+
+### v2.25.0 (2026-03-28)
+- ✅ 修复 `_run_async_safe` qasync 环境 UI 回调永不触发（ThreadPoolExecutor+QTimer → create_task）
+- ✅ 修复任务列表布局清空逻辑（takeAt(0)→takeAt(1)，防止 empty_label 被误删）
+- ✅ 修复待办事项默认筛选遗漏任务（新增"全部"选项并设为默认）
+- ✅ 新增 `compute_time_frame()` 函数，动态计算 time_frame 替代静态存储
+- ✅ 新增 `get_effective_time_frame()` 方法，start_date 推算优先
+- ✅ `list_todos` 改为 Python 侧动态过滤
+- ✅ 今日待办创建自动同步到当日任务（含去重检查）
+- ✅ 任务对话框 start_date 变更自动联动 time_frame 下拉框
 
 ---
 ### v2.24.0 (2026-03-27)
@@ -1211,7 +1291,11 @@ Weclaw 基于 Python 开发，天生具有跨平台能力。虽然主要在 Wind
 让 AI 成为你的效率助手！（Windows/macOS/Linux）
 
 
-**当前版本**: v2.24.0 (2026-03-27)
+**当前版本**: v2.26.0 (2026-03-28)
+
+
+
+
 
 
 

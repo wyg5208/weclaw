@@ -55,6 +55,18 @@ class MealMenuTool(BaseTool):
         super().__init__()
         self._menus_dir = Path(menus_dir) if menus_dir else _DEFAULT_MENUS_DIR
         self._menus_dir.mkdir(parents=True, exist_ok=True)
+        self._cache = None  # Phase 2: 延迟初始化缓存
+
+    def _get_cache(self):
+        """延迟加载缓存管理器（Phase 2）"""
+        if self._cache is None:
+            try:
+                from src.core.cache.file_cache import FileCacheManager
+                self._cache = FileCacheManager()
+            except ImportError:
+                logger.warning("缓存管理器不可用，跳过缓存")
+                self._cache = False
+        return self._cache if self._cache else None
 
     def _get_current_week(self) -> str:
         """获取当前周的 ISO 周标识。"""
@@ -682,7 +694,7 @@ class MealMenuTool(BaseTool):
         )
 
     async def _parse_image(self, params: dict) -> ToolResult:
-        """解析食谱图片。"""
+        """解析食谱图片（Phase 2 增强：支持缓存）。"""
         import os
 
         image_path = params["image_path"]
@@ -702,6 +714,36 @@ class MealMenuTool(BaseTool):
                 error="学校食谱必须指定家庭成员名称",
             )
 
+        # Phase 2: 尝试从缓存获取
+        cache = self._get_cache()
+        from src.core.cache.file_cache import FileCacheManager
+        file_hash = FileCacheManager.compute_hash(image_path) if cache else None
+        cached = None
+        if cache and file_hash:
+            cached = await cache.get(file_hash, "meal_menu")
+            if cached:
+                logger.info(f"食谱图片缓存命中: {Path(image_path).name}")
+                result = cached.get("result", {})
+                path = self._get_menu_path(menu_type, week, member_name)
+                data = self._create_empty_menu(menu_type, week, member_name)
+                data["menu"] = result.get("menu", {})
+                data["source_image"] = Path(image_path).name
+                data["cached"] = True
+                self._save_menu(data, path)
+                dish_count = sum(
+                    len(dishes)
+                    for day_menu in result.get("menu", {}).values()
+                    for dishes in day_menu.values()
+                    if isinstance(dishes, list)
+                )
+                type_label = "学校食谱" if menu_type == "school" else "家庭食谱"
+                member_str = f"【{member_name}】的" if member_name else ""
+                return ToolResult(
+                    status=ToolResultStatus.SUCCESS,
+                    output=f"✅ 已从缓存创建{member_str}{type_label}\n📁 文件：{path}\n📊 共 {dish_count} 道菜品",
+                    data={"file": str(path), "dish_count": dish_count, "cached": True},
+                )
+
         # 检查 API Key
         api_key = os.environ.get("GLM_API_KEY")
         if not api_key:
@@ -719,6 +761,10 @@ class MealMenuTool(BaseTool):
                     status=ToolResultStatus.ERROR,
                     error="图片解析失败，无法识别食谱内容",
                 )
+
+            # Phase 2: 保存到缓存
+            if cache and file_hash:
+                await cache.set(file_hash, "meal_menu", {"result": result})
 
             # 创建食谱并保存
             path = self._get_menu_path(menu_type, week, member_name)
@@ -753,9 +799,9 @@ class MealMenuTool(BaseTool):
     async def _call_vision_model(self, image_path: str, api_key: str) -> dict | None:
         """调用 GLM-4.6V 视觉模型解析食谱图片。"""
         try:
-            from zhipuai import ZhipuAI
+            from zai import ZhipuAiClient  # Phase 1.1 SDK统一: zhipuai → zai
 
-            client = ZhipuAI(api_key=api_key)
+            client = ZhipuAiClient(api_key=api_key)
 
             with open(image_path, "rb") as f:
                 image_base64 = base64.b64encode(f.read()).decode()

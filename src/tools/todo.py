@@ -31,6 +31,7 @@ from src.tools.todo_storage import (
     Todo,
     TodoStatus,
     TodoStorage,
+    compute_time_frame,
 )
 
 logger = logging.getLogger(__name__)
@@ -423,6 +424,7 @@ class TodoTool(BaseTool):
     def _create_todo(self, storage: TodoStorage, params: dict[str, Any]) -> ToolResult:
         """创建待办事项。"""
         import json
+        from datetime import date as _date
 
         title = params.get("title", "").strip()
         if not title:
@@ -433,10 +435,18 @@ class TodoTool(BaseTool):
 
         # 解析参数
         category = TaskCategory(params.get("category", "general"))
-        time_frame = TimeFrame(params.get("time_frame", "future"))
         priority = params.get("priority", 3)
         if not isinstance(priority, int) or priority < 1 or priority > 5:
             priority = 3
+
+        # 自动从 start_date 计算 time_frame（若提供了 start_date）
+        start_date = params.get("start_date")
+        computed_tf = compute_time_frame(start_date)
+        if computed_tf:
+            time_frame = TimeFrame(computed_tf)
+        else:
+            # 无 start_date 时使用用户指定值，默认 future
+            time_frame = TimeFrame(params.get("time_frame", "future"))
 
         # 解析JSON字段
         related_members = []
@@ -462,7 +472,7 @@ class TodoTool(BaseTool):
             category=category,
             time_frame=time_frame,
             priority=priority,
-            start_date=params.get("start_date"),
+            start_date=start_date,
             start_time=params.get("start_time"),
             end_date=params.get("end_date"),
             end_time=params.get("end_time"),
@@ -476,6 +486,36 @@ class TodoTool(BaseTool):
 
         todo_id = storage.create_todo(todo)
 
+        # 今日任务自动同步到 daily_tasks
+        today_str = _date.today().isoformat()
+        is_today = (
+            time_frame == TimeFrame.TODAY
+            or (start_date and str(start_date)[:10] == today_str)
+        )
+        auto_synced = False
+        if is_today:
+            # 检查是否已经有同名今日任务（避免重复）
+            existing = storage.get_daily_tasks(today_str)
+            already_exists = any(
+                t.todo_id == todo_id or t.title == title
+                for t in existing
+            )
+            if not already_exists:
+                daily_task = DailyTask(
+                    todo_id=todo_id,
+                    task_date=today_str,
+                    title=title,
+                    description=params.get("description", ""),
+                    category=category,
+                    priority=priority,
+                    scheduled_start=params.get("start_time"),
+                    scheduled_end=params.get("end_time"),
+                    source="from_todo",
+                )
+                storage.create_daily_task(daily_task)
+                auto_synced = True
+                logger.info(f"待办事项 [{title}] 自动同步到今日当日任务")
+
         # 构建输出
         priority_icon = _PRIORITY_ICONS.get(priority, "🟡")
         category_display = _CATEGORY_DISPLAY.get(category.value, "通用")
@@ -487,8 +527,12 @@ class TodoTool(BaseTool):
 
         if todo.deadline:
             output += f"\n⏰ 截止: {todo.deadline}"
-        if todo.start_date:
-            output += f"\n📅 开始: {todo.start_date}"
+        if start_date:
+            output += f"\n📅 开始: {start_date}"
+        if computed_tf:
+            output += f"\n🗓️ 时间分类已自动计算: {time_frame_display}"
+        if auto_synced:
+            output += f"\n📋 已自动同步到今日当日任务"
         if related_members:
             output += f"\n👥 关系人: {len(related_members)} 人"
         if recurrence != RecurrenceType.NONE:
@@ -497,7 +541,7 @@ class TodoTool(BaseTool):
         return ToolResult(
             status=ToolResultStatus.SUCCESS,
             output=output,
-            data={"id": todo_id, "todo": todo.to_dict()}
+            data={"id": todo_id, "todo": todo.to_dict(), "auto_synced_to_daily": auto_synced}
         )
 
     def _update_todo(self, storage: TodoStorage, params: dict[str, Any]) -> ToolResult:

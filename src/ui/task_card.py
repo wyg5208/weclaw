@@ -393,10 +393,10 @@ class DailyTaskCard(QFrame):
 # ----------------------------------------------------------------------
 
 def create_time_frame_filter(parent: QWidget) -> tuple[QWidget, Callable[[str], None]]:
-    """创建时间周期筛选器。
+    """创建时间周期筛选器（增加"全部"选项作为默认）。
 
     Returns:
-        (筛选器组件, 设置回调函数)
+        (筛选器组件，设置回调函数)
     """
     from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton
 
@@ -406,8 +406,9 @@ def create_time_frame_filter(parent: QWidget) -> tuple[QWidget, Callable[[str], 
     layout.setSpacing(4)
 
     button_group = QButtonGroup(widget)
+    # 增加"全部"选项作为默认，避免遗漏today等周期的任务
     time_frames = [
-        ("today", "今日"),
+        (None, "全部"),
         ("week", "本周"),
         ("month", "本月"),
         ("quarter", "季度"),
@@ -415,7 +416,7 @@ def create_time_frame_filter(parent: QWidget) -> tuple[QWidget, Callable[[str], 
         ("future", "未来"),
     ]
 
-    current_filter = ["today"]  # 默认选中今日
+    current_filter = [None]  # 默认选中全部（不筛选）
 
     def on_button_clicked(checked: bool, tf: str) -> None:
         if checked:

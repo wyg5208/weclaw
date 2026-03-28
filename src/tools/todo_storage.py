@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import date as _date
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -28,6 +30,59 @@ logger = logging.getLogger(__name__)
 
 # 默认数据库路径
 _DEFAULT_DB = Path.home() / ".winclaw" / "winclaw_tools.db"
+
+
+# ----------------------------------------------------------------------
+# 工具函数
+# ----------------------------------------------------------------------
+
+def compute_time_frame(start_date: str | None) -> str | None:
+    """根据起始日期动态计算 time_frame（相对于今天）。
+
+    Args:
+        start_date: ISO日期字符串，如 "2026-03-28" 或 "2026-03-28 10:00"
+
+    Returns:
+        time_frame 字符串 (today/week/month/quarter/year/future)；
+        如果 start_date 为空或无法解析则返回 None。
+    """
+    if not start_date:
+        return None
+    try:
+        d = _date.fromisoformat(str(start_date)[:10])
+    except (ValueError, TypeError):
+        return None
+
+    today = _date.today()
+
+    # 今天或过去（已过期/今日待办）
+    if d <= today:
+        return "today"
+
+    # 本周结束（周日）
+    days_to_week_end = 6 - today.weekday()
+    week_end = today + timedelta(days=days_to_week_end)
+    if d <= week_end:
+        return "week"
+
+    # 本月最后一天
+    last_day_of_month = calendar.monthrange(today.year, today.month)[1]
+    month_end = today.replace(day=last_day_of_month)
+    if d <= month_end:
+        return "month"
+
+    # 本季度最后一天
+    quarter_end_month = ((today.month - 1) // 3 + 1) * 3
+    last_day_of_quarter = calendar.monthrange(today.year, quarter_end_month)[1]
+    quarter_end = _date(today.year, quarter_end_month, last_day_of_quarter)
+    if d <= quarter_end:
+        return "quarter"
+
+    # 今年最后一天
+    if d.year == today.year:
+        return "year"
+
+    return "future"
 
 
 # ----------------------------------------------------------------------
@@ -184,6 +239,17 @@ class Todo:
             updated_at=datetime.fromisoformat(row[22]) if row[22] else datetime.now(),
             completed_at=datetime.fromisoformat(row[23]) if row[23] else None,
         )
+
+    def get_effective_time_frame(self) -> str:
+        """动态计算有效时间周期。
+
+        优先使用 start_date 推算；若无 start_date 则沿用存储的 time_frame。
+        这确保随着时间推移，任务分类始终准确反映其与今天的时间关系。
+        """
+        computed = compute_time_frame(self.start_date)
+        if computed is not None:
+            return computed
+        return self.time_frame.value
 
 
 @dataclass
@@ -499,13 +565,14 @@ class TodoStorage:
         include_completed: bool = False,
         limit: int = 100,
     ) -> list[Todo]:
-        """列出待办事项（支持多条件筛选）。"""
+        """列出待办事项（支持多条件筛选）。
+
+        time_frame 筛选使用动态计算（基于 start_date），确保分类随时间自动更新。
+        """
         query = "SELECT * FROM todos WHERE 1=1"
         params: list[Any] = []
 
-        if time_frame:
-            query += " AND time_frame = ?"
-            params.append(time_frame)
+        # time_frame 改为 Python 侧动态筛选，不写入 SQL，避免静态值失效
         if category:
             query += " AND category = ?"
             params.append(category)
@@ -528,12 +595,17 @@ class TodoStorage:
             search_pattern = f"%{search}%"
             params.extend([search_pattern, search_pattern, search_pattern])
 
-        query += " ORDER BY priority ASC, deadline ASC, created_at DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY priority ASC, start_date ASC, created_at DESC"
 
         with self._conn() as conn:
             rows = conn.execute(query, params).fetchall()
-            return [Todo.from_row(tuple(row)) for row in rows]
+            todos = [Todo.from_row(tuple(row)) for row in rows]
+
+        # 动态 time_frame 筛选：基于 get_effective_time_frame()
+        if time_frame:
+            todos = [t for t in todos if t.get_effective_time_frame() == time_frame]
+
+        return todos[:limit]
 
     def update_todo(self, todo_id: int, updates: dict[str, Any]) -> bool:
         """更新待办事项。"""

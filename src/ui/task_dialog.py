@@ -245,9 +245,23 @@ class TodoDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        # 设置默认日期为今天
+        # 设置默认日期为今天，时间为下一个整点
+        from PySide6.QtCore import QDate, QTime
         today = datetime.now()
-        self._start_date_edit.setDate(today.date())
+        next_hour = (today.hour + 1) % 24
+
+        # 设置开始日期时间
+        self._start_date_edit.setDate(QDate.currentDate())
+        self._start_time_edit.setTime(QTime(next_hour, 0))
+
+        # 设置结束日期时间（与开始日期相同，时间+1小时）
+        self._end_date_edit.setDate(QDate.currentDate())
+        self._end_time_edit.setTime(QTime((next_hour + 1) % 24, 0))
+
+        # 连接 start_date 变更时自动计算并更新 time_frame
+        self._start_date_edit.dateChanged.connect(self._on_start_date_changed)
+        # 初始化时触发一次（根据今天的日期自动设置 time_frame 为 today）
+        self._on_start_date_changed(QDate.currentDate())
 
     def _load_data(self) -> None:
         """加载待办事项数据。"""
@@ -313,6 +327,20 @@ class TodoDialog(QDialog):
                 break
 
         self._notes_edit.setPlainText(self._todo_data.get("notes", ""))
+
+    def _on_start_date_changed(self, qdate) -> None:
+        """起始日期变更时，自动计算并更新时间周期下拉框。"""
+        try:
+            from src.tools.todo_storage import compute_time_frame
+            date_str = qdate.toString("yyyy-MM-dd")
+            computed = compute_time_frame(date_str)
+            if computed:
+                for i in range(self._time_frame_combo.count()):
+                    if self._time_frame_combo.itemData(i) == computed:
+                        self._time_frame_combo.setCurrentIndex(i)
+                        break
+        except Exception:
+            pass  # 自动计算失败时不影响用户手动选择
 
     def _on_accept(self) -> None:
         """确认按钮处理。"""
@@ -399,7 +427,7 @@ class DailyTaskDialog(QDialog):
 
     def _setup_ui(self) -> None:
         """设置UI。"""
-        title = "编辑每日任务" if self._is_edit else "新建每日任务"
+        title = "编辑当日任务" if self._is_edit else "新建当日任务"
         self.setWindowTitle(title)
         self.setMinimumWidth(450)
         self.setMinimumHeight(400)
@@ -483,11 +511,15 @@ class DailyTaskDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        # 设置默认时间为当前小时
+        # 设置默认时间为下一个整点
         now = datetime.now()
         from PySide6.QtCore import QTime
-        self._start_time_edit.setTime(QTime(now.hour, 0))
-        self._end_time_edit.setTime(QTime(now.hour + 1, 0))
+        next_hour = (now.hour + 1) % 24
+        self._start_time_edit.setTime(QTime(next_hour, 0))
+        self._end_time_edit.setTime(QTime((next_hour + 1) % 24, 0))
+
+        # 连接时间联动：起始时间改变时，结束时间自动+1小时
+        self._start_time_edit.timeChanged.connect(self._on_start_time_changed)
 
     def _load_data(self) -> None:
         """加载任务数据。"""
@@ -545,6 +577,14 @@ class DailyTaskDialog(QDialog):
 
                     self._priority_spin.setValue(todo.get("priority", 3))
                     break
+
+    def _on_start_time_changed(self, new_time) -> None:
+        """起始时间改变时，自动更新结束时间为起始时间+1小时。"""
+        from PySide6.QtCore import QTime
+
+        # 计算新的结束时间（+1小时）
+        end_time = new_time.addSecs(3600)  # 3600秒 = 1小时
+        self._end_time_edit.setTime(end_time)
 
     def _on_accept(self) -> None:
         """确认按钮处理。"""
