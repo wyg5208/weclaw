@@ -20,6 +20,7 @@ import logging
 import markdown
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -546,7 +547,7 @@ class PDFGeneratorTool(BaseTool):
                 # 使用 subprocess 调用 Playwright CLI 或 Python API
                 result = subprocess.run(
                     [
-                        "python", "-c",
+                        sys.executable, "-c",
                         f"""
 import asyncio
 from playwright.async_api import async_playwright
