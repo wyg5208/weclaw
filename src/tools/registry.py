@@ -196,6 +196,8 @@ class ToolRegistry:
             kwargs["db_path"] = tool_config.get("db_path", "")
         elif tool_name == "doc_generator":
             kwargs["output_dir"] = tool_config.get("output_dir", "")
+        elif tool_name == "pdf_generator":
+            kwargs["output_dir"] = tool_config.get("output_dir", "")
         elif tool_name == "pdf_tool":
             kwargs["output_dir"] = tool_config.get("output_dir", "")
         elif tool_name == "format_converter":

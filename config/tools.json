@@ -607,7 +607,7 @@
       "display": {
         "name": "文档生成",
         "emoji": "📄",
-        "description": "生成 Word 文档或 HTML 文件，支持 Markdown 格式输入",
+        "description": "生成 Word 文档，支持 Markdown 格式输入和专业模板（学术论文、商业报告、会议纪要等）",
         "category": "generation"
       },
       "config": {
@@ -620,9 +620,33 @@
       "dependencies": {
         "input_sources": ["weather", "image_generator", "file", "search"],
         "standalone": false,
-        "description": "文档生成器，通常需要配合内容源工具使用"
+        "description": "文档生成器，支持模板生成和文档验证"
       },
-      "actions": ["generate_document"]
+      "actions": ["generate_document", "generate_from_template", "list_templates", "validate_document"]
+    },
+    "pdf_generator": {
+      "enabled": true,
+      "module": "src.tools.pdf_generator",
+      "class": "PDFGeneratorTool",
+      "display": {
+        "name": "PDF生成",
+        "emoji": "📑",
+        "description": "高质量 PDF 生成工具，支持 HTML/Markdown 转 PDF，使用 Playwright + Paged.js 实现专业分页控制",
+        "category": "generation"
+      },
+      "config": {
+        "output_dir": ""
+      },
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "dependencies": {
+        "input_sources": ["doc_generator", "markdown_content"],
+        "standalone": false,
+        "description": "PDF 生成器，需要内容输入源"
+      },
+      "actions": ["html_to_pdf", "md_to_pdf", "apply_print_style"]
     },
     "pdf_tool": {
       "enabled": true,
@@ -669,7 +693,7 @@
       "display": {
         "name": "PPT生成",
         "emoji": "📊",
-        "description": "AI 生成演示文稿 PPT，支持多种风格模板",
+        "description": "AI 生成演示文稿 PPT，支持多种风格模板、图表和表格幻灯片",
         "category": "generation"
       },
       "config": {
@@ -679,7 +703,7 @@
         "risk_level": "low",
         "require_confirmation": false
       },
-      "actions": ["generate_ppt", "add_slide", "export_pdf"]
+      "actions": ["generate_ppt", "add_slide", "export_pdf", "add_chart_slide", "add_table_slide", "add_section_divider"]
     },
     "image_generator": {
       "enabled": true,
@@ -869,7 +893,7 @@
         "category": "document"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "low",
@@ -888,7 +912,7 @@
         "category": "data"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "low",
@@ -907,7 +931,7 @@
         "category": "document"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "low",
@@ -926,7 +950,7 @@
         "category": "document"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "low",
@@ -945,7 +969,7 @@
         "category": "media"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "low",
@@ -984,7 +1008,7 @@
         "category": "productivity"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "low",
@@ -1003,7 +1027,7 @@
         "category": "development"
       },
       "config": {
-        "output_dir": "generated"
+        "output_dir": ""
       },
       "security": {
         "risk_level": "medium",

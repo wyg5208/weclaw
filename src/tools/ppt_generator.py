@@ -147,6 +147,83 @@ class PPTTool(BaseTool):
                 },
                 required_params=["ppt_path"],
             ),
+            ActionDef(
+                name="add_chart_slide",
+                description="添加图表幻灯片（柱状图、饼图、折线图）",
+                parameters={
+                    "ppt_path": {
+                        "type": "string",
+                        "description": "已有 PPT 文件路径",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "幻灯片标题",
+                    },
+                    "chart_type": {
+                        "type": "string",
+                        "description": "图表类型",
+                        "enum": ["bar", "pie", "line"],
+                    },
+                    "chart_data": {
+                        "type": "string",
+                        "description": "图表数据，JSON格式。如：{\"labels\":[\"A\",\"B\",\"C\"],\"values\":[10,20,30]}",
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "配色风格: business/academic/creative/minimal",
+                        "enum": ["business", "academic", "creative", "minimal"],
+                    },
+                },
+                required_params=["ppt_path", "title", "chart_type", "chart_data"],
+            ),
+            ActionDef(
+                name="add_table_slide",
+                description="添加表格幻灯片",
+                parameters={
+                    "ppt_path": {
+                        "type": "string",
+                        "description": "已有 PPT 文件路径",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "幻灯片标题",
+                    },
+                    "table_data": {
+                        "type": "string",
+                        "description": "表格数据，JSON格式。格式：[{\"headers\":[\"列1\",\"列2\"]},{\"row1\":[\"数据1\",\"数据2\"]}]",
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "配色风格: business/academic/creative/minimal",
+                        "enum": ["business", "academic", "creative", "minimal"],
+                    },
+                },
+                required_params=["ppt_path", "title", "table_data"],
+            ),
+            ActionDef(
+                name="add_section_divider",
+                description="添加章节分隔页",
+                parameters={
+                    "ppt_path": {
+                        "type": "string",
+                        "description": "已有 PPT 文件路径",
+                    },
+                    "section_title": {
+                        "type": "string",
+                        "description": "章节标题",
+                    },
+                    "section_number": {
+                        "type": "integer",
+                        "description": "章节编号",
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "配色风格: business/academic/creative/minimal",
+                        "enum": ["business", "academic", "creative", "minimal"],
+                    },
+                },
+                required_params=["ppt_path", "section_title"],
+            ),
         ]
 
     async def execute(self, action: str, params: dict[str, Any]) -> ToolResult:
@@ -156,6 +233,12 @@ class PPTTool(BaseTool):
             return self._add_slide(params)
         elif action == "export_pdf":
             return self._export_pdf(params)
+        elif action == "add_chart_slide":
+            return self._add_chart_slide(params)
+        elif action == "add_table_slide":
+            return self._add_table_slide(params)
+        elif action == "add_section_divider":
+            return self._add_section_divider(params)
         else:
             return ToolResult(
                 status=ToolResultStatus.ERROR,
@@ -614,6 +697,271 @@ class PPTTool(BaseTool):
                 "suggestion": "请使用 PowerPoint 或 WPS 打开 PPT 文件后，选择「另存为」或「导出」为 PDF 格式。",
             },
         )
+
+    def _add_chart_slide(self, params: dict[str, Any]) -> ToolResult:
+        """添加图表幻灯片。"""
+        ppt_path = params.get("ppt_path", "").strip()
+        title = params.get("title", "").strip()
+        chart_type = params.get("chart_type", "bar")
+        chart_data_str = params.get("chart_data", "{}")
+        style = params.get("style", "business")
+
+        if not ppt_path or not title:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="PPT路径和标题不能为空",
+            )
+
+        ppt_file = Path(ppt_path)
+        if not ppt_file.exists():
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"PPT文件不存在: {ppt_path}",
+            )
+
+        try:
+            import json
+            chart_data = json.loads(chart_data_str)
+
+            prs = Presentation(str(ppt_file))
+            colors = self._get_style_colors(style)
+
+            # 创建图表
+            from pptx.chart.data import CategoryChartData
+            from pptx.enum.chart import XL_CHART_TYPE
+
+            # 添加幻灯片
+            slide_layout = prs.slide_layouts[6]  # 空白布局
+            slide = prs.slides.add_slide(slide_layout)
+            self._set_slide_background(slide, colors["bg"])
+
+            # 添加标题
+            title_box = slide.shapes.add_textbox(
+                Inches(0.5), Inches(0.4), Inches(12.333), Inches(1.0)
+            )
+            title_frame = title_box.text_frame
+            p = title_frame.paragraphs[0]
+            p.text = title
+            p.font.size = Pt(32)
+            p.font.bold = True
+            p.font.color.rgb = colors["primary"]
+
+            # 创建图表数据
+            chart_data_obj = CategoryChartData()
+            chart_data_obj.categories = chart_data.get("labels", [])
+            chart_data_obj.add_series("数据", chart_data.get("values", []))
+
+            # 添加图表
+            x, y, cx, cy = Inches(1), Inches(1.5), Inches(10), Inches(5)
+            chart = slide.shapes.add_chart(
+                XL_CHART_TYPE.BAR_CLUSTERED if chart_type == "bar"
+                else XL_CHART_TYPE.PIE if chart_type == "pie"
+                else XL_CHART_TYPE.LINE, x, y, cx, cy, chart_data_obj
+            ).chart
+
+            # 保存
+            prs.save(str(ppt_file))
+            logger.info("图表幻灯片添加成功: %s", ppt_file)
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output=f"✅ 图表幻灯片添加成功\n📁 文件: {ppt_file.name}\n📊 图表类型: {chart_type}",
+                data={
+                    "file_path": str(ppt_file),
+                    "chart_type": chart_type,
+                    "title": title,
+                },
+            )
+
+        except json.JSONDecodeError:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="图表数据格式错误，请使用JSON格式",
+            )
+        except Exception as e:
+            logger.error("添加图表幻灯片失败: %s", e)
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"添加图表幻灯片失败: {e}",
+            )
+
+    def _add_table_slide(self, params: dict[str, Any]) -> ToolResult:
+        """添加表格幻灯片。"""
+        ppt_path = params.get("ppt_path", "").strip()
+        title = params.get("title", "").strip()
+        table_data_str = params.get("table_data", "[]")
+        style = params.get("style", "business")
+
+        if not ppt_path or not title:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="PPT路径和标题不能为空",
+            )
+
+        ppt_file = Path(ppt_path)
+        if not ppt_file.exists():
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"PPT文件不存在: {ppt_path}",
+            )
+
+        try:
+            import json
+            table_data = json.loads(table_data_str)
+
+            prs = Presentation(str(ppt_file))
+            colors = self._get_style_colors(style)
+
+            # 添加幻灯片
+            slide_layout = prs.slide_layouts[6]  # 空白布局
+            slide = prs.slides.add_slide(slide_layout)
+            self._set_slide_background(slide, colors["bg"])
+
+            # 添加标题
+            title_box = slide.shapes.add_textbox(
+                Inches(0.5), Inches(0.4), Inches(12.333), Inches(1.0)
+            )
+            title_frame = title_box.text_frame
+            p = title_frame.paragraphs[0]
+            p.text = title
+            p.font.size = Pt(32)
+            p.font.bold = True
+            p.font.color.rgb = colors["primary"]
+
+            # 解析表格数据
+            if isinstance(table_data, list) and len(table_data) > 0:
+                if isinstance(table_data[0], dict) and "headers" in table_data[0]:
+                    # 新格式
+                    headers = table_data[0].get("headers", [])
+                    rows = [item.get("row", []) for item in table_data[1:] if isinstance(item, dict)]
+                    all_rows = [headers] + rows
+                else:
+                    all_rows = table_data
+
+                if all_rows and len(all_rows) > 0:
+                    num_rows = len(all_rows)
+                    num_cols = max(len(row) for row in all_rows) if all_rows else 0
+
+                    # 添加表格
+                    x, y, cx, cy = Inches(0.5), Inches(1.5), Inches(12), Inches(5)
+                    table = slide.shapes.add_table(num_rows, num_cols, x, y, cx, cy).table
+
+                    # 填充数据
+                    for i, row in enumerate(all_rows):
+                        for j, cell_value in enumerate(row):
+                            if j < num_cols:
+                                cell = table.cell(i, j)
+                                cell.text = str(cell_value) if cell_value else ""
+                                # 表头样式
+                                if i == 0:
+                                    for para in cell.text_frame.paragraphs:
+                                        para.font.bold = True
+                                        para.font.size = Pt(14)
+                                        para.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                                    cell.fill.solid()
+                                    cell.fill.fore_color.rgb = colors["primary"]
+                                else:
+                                    for para in cell.text_frame.paragraphs:
+                                        para.font.size = Pt(12)
+                                        para.font.color.rgb = colors["secondary"]
+
+            # 保存
+            prs.save(str(ppt_file))
+            logger.info("表格幻灯片添加成功: %s", ppt_file)
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output=f"✅ 表格幻灯片添加成功\n📁 文件: {ppt_file.name}\n📊 表格数据已添加",
+                data={
+                    "file_path": str(ppt_file),
+                    "title": title,
+                },
+            )
+
+        except json.JSONDecodeError:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="表格数据格式错误，请使用JSON格式",
+            )
+        except Exception as e:
+            logger.error("添加表格幻灯片失败: %s", e)
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"添加表格幻灯片失败: {e}",
+            )
+
+    def _add_section_divider(self, params: dict[str, Any]) -> ToolResult:
+        """添加章节分隔页。"""
+        ppt_path = params.get("ppt_path", "").strip()
+        section_title = params.get("section_title", "").strip()
+        section_number = params.get("section_number", 1)
+        style = params.get("style", "business")
+
+        if not ppt_path or not section_title:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="PPT路径和章节标题不能为空",
+            )
+
+        ppt_file = Path(ppt_path)
+        if not ppt_file.exists():
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"PPT文件不存在: {ppt_path}",
+            )
+
+        try:
+            prs = Presentation(str(ppt_file))
+            colors = self._get_style_colors(style)
+
+            # 添加幻灯片
+            slide_layout = prs.slide_layouts[6]  # 空白布局
+            slide = prs.slides.add_slide(slide_layout)
+            self._set_slide_background(slide, colors["primary"])
+
+            # 章节编号
+            num_box = slide.shapes.add_textbox(
+                Inches(0.5), Inches(2.5), Inches(12.333), Inches(1.5)
+            )
+            num_frame = num_box.text_frame
+            p = num_frame.paragraphs[0]
+            p.text = f"第 {section_number} 部分"
+            p.font.size = Pt(24)
+            p.font.color.rgb = colors["accent"]
+            p.alignment = PP_ALIGN.CENTER
+
+            # 章节标题
+            title_box = slide.shapes.add_textbox(
+                Inches(0.5), Inches(3.5), Inches(12.333), Inches(2)
+            )
+            title_frame = title_box.text_frame
+            p = title_frame.paragraphs[0]
+            p.text = section_title
+            p.font.size = Pt(44)
+            p.font.bold = True
+            p.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+            p.alignment = PP_ALIGN.CENTER
+
+            # 保存
+            prs.save(str(ppt_file))
+            logger.info("章节分隔页添加成功: %s", ppt_file)
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output=f"✅ 章节分隔页添加成功\n📁 文件: {ppt_file.name}\n📋 第 {section_number} 部分: {section_title}",
+                data={
+                    "file_path": str(ppt_file),
+                    "section_number": section_number,
+                    "section_title": section_title,
+                },
+            )
+
+        except Exception as e:
+            logger.error("添加章节分隔页失败: %s", e)
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"添加章节分隔页失败: {e}",
+            )
 
 
 # 用于测试

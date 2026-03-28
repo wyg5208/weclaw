@@ -890,11 +890,11 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(new_btn)
 
         # 复制对话区按钮
-        copy_chat_btn = QPushButton(tr("📋 复制对话"))
-        copy_chat_btn.setToolTip(tr("复制所有对话内容"))
-        copy_chat_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px;")
-        copy_chat_btn.clicked.connect(self._on_copy_chat)
-        toolbar.addWidget(copy_chat_btn)
+        self.copy_chat_btn = QPushButton(tr("📋 复制对话"))
+        self.copy_chat_btn.setToolTip(tr("复制所有对话内容"))
+        self.copy_chat_btn.setStyleSheet("font-size: 11px; padding: 4px 8px; min-width: 80px; max-width: 90px;")
+        self.copy_chat_btn.clicked.connect(self._on_copy_chat)
+        toolbar.addWidget(self.copy_chat_btn)
 
         toolbar.addSeparator()
 
@@ -2606,15 +2606,33 @@ class MainWindow(QMainWindow):
         self._chat_widget.clear()
         self._session_info.setText("新会话")
         self._status_session.setText(tr("会话") + ": " + tr("新会话"))
+        # 清空工具状态日志
+        self.clear_tool_log()
+        self.set_tool_status("空闲")
         self.message_sent.emit("/new_session")
 
     def _on_copy_chat(self) -> None:
         """复制所有对话内容到剪贴板。"""
         from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QTimer
         conversation_text = self._chat_widget.copy_all_conversation()
         if conversation_text:
             clipboard = QApplication.clipboard()
             clipboard.setText(conversation_text)
+            # 按钮反馈：文字变为"已复制"
+            original_text = self.copy_chat_btn.text()
+            self.copy_chat_btn.setText(tr("✓ 已复制"))
+            self.copy_chat_btn.setEnabled(False)
+            # 状态栏显示提示
+            self._status_bar.showMessage(tr("已复制到剪贴板"), 2000)
+            # 1.5秒后恢复按钮
+            QTimer.singleShot(1500, lambda: self._restore_copy_button(original_text))
+
+    def _restore_copy_button(self, original_text: str) -> None:
+        """恢复复制按钮的原始状态。"""
+        if hasattr(self, 'copy_chat_btn'):
+            self.copy_chat_btn.setText(original_text)
+            self.copy_chat_btn.setEnabled(True)
 
     def _on_clear_chat(self) -> None:
         """清空对话。"""

@@ -852,7 +852,6 @@ class WinClawGuiApp:
         
         def _on_message_started():
             safe_set_tool_status("生成中...")
-            safe_clear_tool_log()
             # 新回复开始生成时，中止上一条消息的 TTS 播放（如有）
             if self._window._tts_player and self._window._tts_player.is_playing:
                 logger.info("新回复开始生成，中止上一条消息的 TTS 播放")

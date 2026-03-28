@@ -240,15 +240,79 @@ class DocGeneratorTool(BaseTool):
                 },
                 required_params=["content"],
             ),
+            ActionDef(
+                name="generate_from_template",
+                description=(
+                    "从专业模板生成文档。支持 academic_paper（学术论文）、business_report（商业报告）、"
+                    "meeting_minutes（会议纪要）、contract（合同）、resume（简历）等模板。"
+                ),
+                parameters={
+                    "template": {
+                        "type": "string",
+                        "description": "模板名称",
+                        "enum": ["academic_paper", "business_report", "meeting_minutes", "contract", "resume"],
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "文档标题/主题",
+                    },
+                    "author": {
+                        "type": "string",
+                        "description": "作者/姓名",
+                    },
+                    "organization": {
+                        "type": "string",
+                        "description": "组织/公司名称",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "日期，默认当前日期",
+                    },
+                    "color_scheme": {
+                        "type": "string",
+                        "description": "配色方案: business/academic/tech/nature",
+                        "enum": ["business", "academic", "tech", "nature"],
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "输出文件名（不含扩展名）",
+                    },
+                },
+                required_params=["template", "title"],
+            ),
+            ActionDef(
+                name="list_templates",
+                description="列出所有可用的文档模板",
+                parameters={},
+                required_params=[],
+            ),
+            ActionDef(
+                name="validate_document",
+                description="验证 Word 文档的结构完整性（检查表格、图片、书签等）",
+                parameters={
+                    "file_path": {
+                        "type": "string",
+                        "description": "要验证的 DOCX 文件路径",
+                    },
+                },
+                required_params=["file_path"],
+            ),
         ]
 
     async def execute(self, action: str, params: dict[str, Any]) -> ToolResult:
-        if action != "generate_document":
+        if action == "generate_document":
+            return self._generate_document(params)
+        elif action == "generate_from_template":
+            return self._generate_from_template(params)
+        elif action == "list_templates":
+            return self._list_templates(params)
+        elif action == "validate_document":
+            return self._validate_document(params)
+        else:
             return ToolResult(
                 status=ToolResultStatus.ERROR,
                 error=f"不支持的动作: {action}",
             )
-        return self._generate_document(params)
 
     def _generate_document(self, params: dict[str, Any]) -> ToolResult:
         """生成文档的核心逻辑。"""
@@ -610,6 +674,233 @@ class DocGeneratorTool(BaseTool):
         doc.save(output_path)
         logger.info("python-docx 生成成功: %s", output_path)
         return "python-docx"
+
+    def _generate_from_template(self, params: dict[str, Any]) -> ToolResult:
+        """从模板生成文档。"""
+        template_name = params.get("template", "").strip()
+        if not template_name:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="模板名称不能为空",
+            )
+
+        title = params.get("title", "").strip()
+        if not title:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="文档标题不能为空",
+            )
+
+        author = params.get("author", "").strip()
+        organization = params.get("organization", "").strip()
+        date = params.get("date", "").strip() or datetime.now().strftime("%Y年%m月%d日")
+        color_scheme = params.get("color_scheme", "business")
+        filename = params.get("filename", "").strip()
+
+        # 验证模板名称
+        valid_templates = ["academic_paper", "business_report", "meeting_minutes", "contract", "resume"]
+        if template_name not in valid_templates:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"无效的模板: {template_name}，可用模板: {', '.join(valid_templates)}",
+            )
+
+        # 验证配色方案
+        valid_schemes = ["business", "academic", "tech", "nature"]
+        if color_scheme not in valid_schemes:
+            color_scheme = "business"
+
+        try:
+            # 导入模板模块
+            import sys
+            from pathlib import Path as PathLib
+            sys.path.insert(0, str(PathLib(__file__).parent.parent.parent))
+            from resources.docx_templates.templates import (
+                TemplateOptions,
+                create_from_template,
+            )
+
+            options = TemplateOptions(
+                title=title,
+                author=author,
+                date=date,
+                organization=organization,
+                color_scheme=color_scheme,
+            )
+
+            doc = create_from_template(template_name, options)
+            if not doc:
+                return ToolResult(
+                    status=ToolResultStatus.ERROR,
+                    error=f"模板创建失败: {template_name}",
+                )
+
+            # 生成文件名
+            if not filename:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{template_name}_{timestamp}"
+
+            output_path = self.output_dir / f"{filename}.docx"
+            doc.save(str(output_path))
+
+            file_size = output_path.stat().st_size
+
+            logger.info("模板文档生成成功: %s", output_path)
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output=f"✅ 模板文档生成完成\n📁 文件: {output_path.name}\n📊 大小: {file_size} 字节\n📋 模板: {template_name}\n🎨 配色: {color_scheme}",
+                data={
+                    "file_path": str(output_path),
+                    "file_name": output_path.name,
+                    "file_size": file_size,
+                    "template": template_name,
+                    "color_scheme": color_scheme,
+                    "title": title,
+                },
+            )
+
+        except Exception as e:
+            logger.error("模板文档生成失败: %s", e)
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"模板文档生成失败: {e}",
+            )
+
+    def _list_templates(self, params: dict[str, Any]) -> ToolResult:
+        """列出所有可用模板。"""
+        try:
+            import sys
+            from pathlib import Path as PathLib
+            sys.path.insert(0, str(PathLib(__file__).parent.parent.parent))
+            from resources.docx_templates.templates import list_templates
+
+            templates = list_templates()
+
+            output = "📋 可用文档模板:\n\n"
+            for tmpl in templates:
+                output += f"• {tmpl['title']} ({tmpl['name']})\n"
+                output += f"  {tmpl['description']}\n\n"
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS,
+                output=output,
+                data={"templates": templates},
+            )
+
+        except Exception as e:
+            logger.error("列出模板失败: %s", e)
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"列出模板失败: {e}",
+            )
+
+    def _validate_document(self, params: dict[str, Any]) -> ToolResult:
+        """验证 Word 文档的结构完整性。"""
+        file_path = params.get("file_path", "").strip()
+        if not file_path:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error="文件路径不能为空",
+            )
+
+        docx_path = Path(file_path)
+        if not docx_path.exists():
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"文件不存在: {file_path}",
+            )
+
+        if docx_path.suffix.lower() not in (".docx", ".docm"):
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"不支持的文件格式: {docx_path.suffix}",
+            )
+
+        try:
+            # 使用 DOCX 验证器
+            from src.tools.docx_validator import run_validation
+
+            report = run_validation(str(docx_path))
+
+            if report.passed:
+                output = f"✅ 文档验证通过\n📁 文件: {docx_path.name}"
+                if report.warnings:
+                    output += f"\n⚠️  警告 ({len(report.warnings)}):\n"
+                    for warn in report.warnings[:5]:
+                        output += f"  • {warn}\n"
+            else:
+                output = f"❌ 文档验证失败\n📁 文件: {docx_path.name}\n\n"
+                if report.errors:
+                    output += "错误:\n"
+                    for err in report.errors:
+                        output += f"  • {err}\n"
+                if report.warnings:
+                    output += "\n警告:\n"
+                    for warn in report.warnings[:5]:
+                        output += f"  • {warn}\n"
+
+            return ToolResult(
+                status=ToolResultStatus.SUCCESS if report.passed else ToolResultStatus.ERROR,
+                output=output,
+                data={
+                    "passed": report.passed,
+                    "errors": report.errors,
+                    "warnings": report.warnings,
+                },
+            )
+
+        except ImportError:
+            # 降级：使用基本验证
+            return self._basic_validate_docx(docx_path)
+        except Exception as e:
+            logger.error("文档验证失败: %s", e)
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"文档验证失败: {e}",
+            )
+
+    def _basic_validate_docx(self, docx_path: Path) -> ToolResult:
+        """基本 DOCX 验证（不依赖 docx_validator）。"""
+        try:
+            doc = Document(str(docx_path))
+
+            # 统计信息
+            para_count = len(doc.paragraphs)
+            table_count = len(doc.tables)
+            section_count = len(doc.sections)
+
+            # 检查内容
+            has_content = para_count > 0
+
+            output = f"📊 文档分析:\n"
+            output += f"  • 段落数: {para_count}\n"
+            output += f"  • 表格数: {table_count}\n"
+            output += f"  • 节数: {section_count}\n"
+
+            if has_content:
+                output += f"\n✅ 文档结构正常"
+                status = ToolResultStatus.SUCCESS
+            else:
+                output += f"\n⚠️ 文档可能为空"
+                status = ToolResultStatus.WARNING
+
+            return ToolResult(
+                status=status,
+                output=output,
+                data={
+                    "passed": has_content,
+                    "paragraph_count": para_count,
+                    "table_count": table_count,
+                    "section_count": section_count,
+                },
+            )
+
+        except Exception as e:
+            return ToolResult(
+                status=ToolResultStatus.ERROR,
+                error=f"文档验证失败: {e}",
+            )
 
 
 # 用于测试
