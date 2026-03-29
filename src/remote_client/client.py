@@ -138,6 +138,9 @@ class RemoteBridgeClient:
         self._running = False
         self._reconnect_attempts = 0
         
+        # 设备指纹缓存（WebSocket 和 HTTP 共用）
+        self._device_fingerprint: str = ""
+        
         # 消息处理器
         from .message_handler import MessageHandler
         from .status_reporter import StatusReporter
@@ -275,15 +278,15 @@ class RemoteBridgeClient:
         """建立 WebSocket 连接"""
         self._set_state(ConnectionState.CONNECTING)
         
-        # 自动生成设备指纹
-        device_fingerprint = ""
-        if self.config.auto_fingerprint:
+        # 自动生成设备指纹（缓存到实例属性，HTTP 上传时复用）
+        if not self._device_fingerprint and self.config.auto_fingerprint:
             try:
                 from .device_fingerprint import get_device_fingerprint
-                device_fingerprint = get_device_fingerprint()
-                logger.info(f"自动生成设备指纹: {device_fingerprint[:16]}...")
+                self._device_fingerprint = get_device_fingerprint()
+                logger.info(f"自动生成设备指纹: {self._device_fingerprint[:16]}...")
             except Exception as e:
                 logger.warning(f"生成设备指纹失败: {e}")
+        device_fingerprint = self._device_fingerprint
         
         # 构建连接 URL
         url = f"{self.config.server_url}?session_id={self._session_id}"
@@ -421,7 +424,7 @@ class RemoteBridgeClient:
             # 通知 GUI 更新状态
             if self.event_bus:
                 try:
-                    self.event_bus.emit("bridge_connected", {
+                    await self.event_bus.emit("bridge_connected", {
                         "user_bound": user_bound,
                         "device_id": device_id
                     })
@@ -451,6 +454,10 @@ class RemoteBridgeClient:
         elif msg_type == "pwa_status":
             # PWA 连接状态更新
             await self._handle_pwa_status(payload)
+        
+        elif msg_type == "file_request":
+            # PWA 请求桌面端提供文件
+            await self._handle_file_request(request_id, payload)
         
         else:
             logger.warning(f"未知消息类型: {msg_type}")
@@ -527,7 +534,64 @@ class RemoteBridgeClient:
                 self.event_bus.emit("pwa_status_update", connections)
             except Exception as e:
                 logger.warning(f"发送 PWA 状态事件失败：{e}")
+    
+    async def _handle_file_request(self, request_id: str, payload: dict):
+        """处理来自 PWA 的文件请求 (file_request)
         
+        当 PWA 端请求桌面端发送特定文件时，桌面端收到此消息后：
+        1. 通过 event_bus 通知 GUI 弹出文件选择对话框
+        2. 用户选择文件后，GUI 调用 respond_file_request() 发送文件
+        
+        注意：PWA 请求路由映射（register_pwa_request）由服务器端维护，
+        桌面端只需通过 event_bus 通知 GUI 并最终回传 file_response 即可。
+        
+        Args:
+            request_id: 请求追踪ID（用于响应路由）
+            payload: 消息负载
+                - user_id: 请求的用户ID
+                - session_id: 关联的会话ID
+                - reason: 请求原因描述
+                - filters: 文件类型过滤（可选）
+        """
+        user_id = payload.get("user_id", "")
+        session_id = payload.get("session_id", "")
+        reason = payload.get("reason", "")
+        filters = payload.get("filters", {})
+        
+        logger.info(
+            f"收到远程文件请求: request={request_id[:8]}, "
+            f"user={user_id[:8] if user_id else 'unknown'}, reason={reason}"
+        )
+        
+        # 若没有事件总线，当前版本无法交互式选择文件，返回错误
+        if not self.event_bus:
+            logger.warning("event_bus 不可用，无法处理交互式文件请求")
+            await self._send_error(
+                "FILE_REQUEST_UNSUPPORTED",
+                "当前桌面端不支持远程文件请求处理",
+                request_id=request_id,
+            )
+            return
+        
+        try:
+            # 通知 GUI 弹出「远程文件请求」对话框
+            # GUI 应在用户选择完后调用 respond_file_request()
+            await self.event_bus.emit("remote_file_request", {
+                "request_id": request_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "reason": reason,
+                "filters": filters,
+            })
+            logger.info(f"已发送 remote_file_request 事件到 GUI")
+        except Exception as e:
+            logger.error(f"发送 remote_file_request 事件失败: {e}", exc_info=True)
+            await self._send_error(
+                "FILE_REQUEST_EVENT_FAILED",
+                "无法处理远程文件请求",
+                request_id=request_id,
+            )
+    
     # ✅ Phase 2.4: 重连后的恢复逻辑
     async def _on_reconnected(self):
         """重连成功后的处理 - 通知服务器恢复离线消息"""
@@ -646,6 +710,117 @@ class RemoteBridgeClient:
                 except Exception as _e:
                     logger.debug(f"发射 remote_request_ended 事件失败: {_e}")
     
+    def _get_server_base_url(self) -> str:
+        """从 WebSocket server_url 推导 HTTP 基础地址
+        
+        用于构建文件上传/下载的 HTTP API 地址。
+        复用逻辑，避免各处重复 ws→http 转换。
+        
+        Returns:
+            HTTP/HTTPS 基础 URL
+        """
+        server_url = getattr(self.config, "server_url", "")
+        if not server_url:
+            return "https://weclaw.cc:8188"
+        
+        base = server_url.replace("/ws/bridge", "")
+        if base.startswith("wss://"):
+            base = "https://" + base[len("wss://"):]
+        elif base.startswith("ws://"):
+            base = "http://" + base[len("ws://"):]
+        return base
+
+    def _get_valid_access_token(self) -> str:
+        """获取有效的 access_token，支持 keystore 加载和自动刷新。
+        
+        优先级：
+        1. 检查 self.config.token 是否有效（未过期）
+        2. 从 keystore 加载 WECLAW_ACCESS_TOKEN
+        3. 使用 WECLAW_REFRESH_TOKEN 刷新获取新 token
+        4. 刷新成功后同步更新 self.config.token 和 keystore
+        
+        Returns:
+            有效的 access_token，获取失败返回空字符串
+        """
+        import time
+        
+        def _is_token_valid(token: str) -> bool:
+            """简单检查 JWT token 是否未过期（解码 payload 但不验证签名）。"""
+            if not token:
+                return False
+            try:
+                import base64
+                import json
+                # JWT = header.payload.signature
+                parts = token.split(".")
+                if len(parts) != 3:
+                    return False
+                # Base64url 解码 payload
+                payload_b64 = parts[1]
+                # 补齐 padding
+                padding = 4 - len(payload_b64) % 4
+                if padding != 4:
+                    payload_b64 += "=" * padding
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+                exp = payload.get("exp", 0)
+                # 提前 60 秒视为过期，留出安全余量
+                return exp > time.time() + 60
+            except Exception:
+                return False
+        
+        # 1. 检查当前 config.token
+        if _is_token_valid(self.config.token):
+            return self.config.token
+        
+        # 2. 从 keystore 加载
+        try:
+            from ..ui.keystore import load_key, save_key
+            stored_token = load_key("WECLAW_ACCESS_TOKEN")
+            if _is_token_valid(stored_token):
+                self.config.token = stored_token
+                logger.info("从 keystore 加载有效 access_token")
+                return stored_token
+        except Exception as e:
+            logger.debug(f"从 keystore 加载 token 失败: {e}")
+        
+        # 3. 使用 refresh_token 刷新
+        try:
+            from ..ui.keystore import load_key, save_key
+            refresh_token = load_key("WECLAW_REFRESH_TOKEN")
+            if not refresh_token:
+                logger.warning("无 refresh_token，无法刷新 access_token")
+                return self.config.token or ""
+            
+            import requests as http_requests
+            base_url = self._get_server_base_url()
+            refresh_url = f"{base_url}/api/auth/refresh"
+            
+            resp = http_requests.post(
+                refresh_url,
+                headers={"Authorization": f"Bearer {refresh_token}"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            
+            new_token = ""
+            if isinstance(result, dict):
+                # 兼容 {"success": true, "data": {"access_token": "..."}} 格式
+                data = result.get("data", result)
+                new_token = data.get("access_token", "")
+            
+            if new_token and _is_token_valid(new_token):
+                self.config.token = new_token
+                save_key("WECLAW_ACCESS_TOKEN", new_token)
+                logger.info("access_token 自动刷新成功")
+                return new_token
+            else:
+                logger.warning(f"刷新返回的 token 无效")
+        except Exception as e:
+            logger.warning(f"刷新 access_token 失败: {e}")
+        
+        return self.config.token or ""
+    
     def _build_remote_attachment_context(
         self, 
         attachments: list, 
@@ -679,9 +854,7 @@ class RemoteBridgeClient:
             return user_message
         
         # 获取服务器基础 URL（用于构建完整的图片地址）
-        server_base_url = getattr(self.config, 'server_url', '').replace('/ws/bridge', '').replace('wss://', 'https://').replace('ws://', 'http://')
-        if not server_base_url:
-            server_base_url = "https://weclaw.cc:8188"
+        server_base_url = self._get_server_base_url()
         
         # 【重要】明确标注这是当前对话的附件
         lines = [
@@ -1054,6 +1227,158 @@ class RemoteBridgeClient:
         
         return desc
     
+    def _upload_file_to_remote(
+        self,
+        file_path: str,
+        user_id: str,
+        session_id: str = "",
+        description: str = "",
+    ) -> dict | None:
+        """上传本地文件到远程文件服务
+        
+        将本地文件通过 HTTP POST 上传到服务器 /api/files/upload 接口，
+        并将上传成功的元数据写入 AttachmentStorage 以便历史检索。
+        
+        Args:
+            file_path: 本地文件的绝对路径或相对路径
+            user_id: 关联的用户ID（用于存储隔离）
+            session_id: 关联的会话ID（可选）
+            description: 文件描述（可选，用于搜索）
+            
+        Returns:
+            上传成功的响应数据，包含 attachment_id, filename, size_bytes, url
+            失败返回 None
+        """
+        import mimetypes
+        
+        try:
+            import requests
+        except ImportError:
+            logger.warning("requests 库未安装，无法上传文件到远程服务器")
+            return None
+        
+        path = Path(file_path)
+        if not path.is_file():
+            logger.warning(f"待上传文件不存在: {file_path}")
+            return None
+        
+        # 检查文件大小（防止上传超大文件）
+        file_size = path.stat().st_size
+        max_size = 50 * 1024 * 1024  # 50MB，与服务器配置一致
+        if file_size > max_size:
+            logger.warning(f"文件大小超过限制: {file_size} bytes > {max_size} bytes")
+            return None
+        
+        base_url = self._get_server_base_url()
+        upload_url = f"{base_url}/api/files/upload"
+        
+        # 推测 MIME 类型
+        mime_type, _ = mimetypes.guess_type(str(path))
+        if not mime_type:
+            mime_type = "application/octet-stream"
+        
+        # 构建认证头：
+        # 主认证: X-Device-Fingerprint（复用 Bridge 已验证的设备指纹）
+        # 后备: JWT Bearer Token（从 keystore 加载 + 自动刷新）
+        headers = {}
+        if self._device_fingerprint:
+            headers["X-Device-Fingerprint"] = self._device_fingerprint
+        access_token = self._get_valid_access_token()
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+        
+        if not self._device_fingerprint and not access_token:
+            logger.warning("无设备指纹也无 access_token，上传可能因 401 认证失败")
+        
+        logger.info(f"开始上传本地文件: {file_path} -> {upload_url}")
+        
+        try:
+            with open(path, "rb") as f:
+                files = {"file": (path.name, f, mime_type)}
+                data = {"session_id": session_id} if session_id else {}
+                
+                resp = requests.post(
+                    upload_url,
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=120  # 大文件需要较长超时
+                )
+            
+            if resp.status_code == 401:
+                # 两种认证都失败，尝试强制刷新 JWT 后重试
+                logger.warning("上传认证失败(401)，尝试刷新 token 后重试")
+                self.config.token = ""  # 清除旧 token 强制刷新
+                new_token = self._get_valid_access_token()
+                if new_token:
+                    headers["Authorization"] = f"Bearer {new_token}"
+                    with open(path, "rb") as f:
+                        files = {"file": (path.name, f, mime_type)}
+                        resp = requests.post(
+                            upload_url, headers=headers,
+                            files=files, data=data, timeout=120,
+                        )
+                else:
+                    logger.error("刷新 token 失败，无法重试上传")
+            
+            resp.raise_for_status()
+            result = resp.json()
+        except requests.RequestException as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', '?')
+            detail = ""
+            try:
+                detail = e.response.json().get('detail', '') if e.response else ''
+            except Exception:
+                pass
+            logger.error(f"上传文件失败: HTTP {status} {detail or e}")
+            return None
+        except Exception as e:
+            logger.error(f"上传文件异常: {e}")
+            return None
+        
+        # 验证响应完整性
+        attachment_id = result.get("attachment_id")
+        filename = result.get("filename", path.name)
+        size_bytes = result.get("size_bytes", file_size)
+        url = result.get("url")
+        
+        if not attachment_id or not url:
+            logger.error(f"上传返回结果不完整: {result}")
+            return None
+        
+        logger.info(
+            f"本地文件上传成功: id={attachment_id[:8]}, "
+            f"name={filename}, size={size_bytes}"
+        )
+        
+        # 写入附件持久化存储（便于历史检索）
+        try:
+            from .attachment_storage import get_attachment_storage, StoredAttachment
+            storage = get_attachment_storage()
+            
+            attachment = StoredAttachment(
+                id=attachment_id,
+                session_id=session_id or self._session_id,
+                user_id=user_id,
+                filename=filename,
+                file_type=self._categorize_file(filename, mime_type, "file"),
+                mime_type=mime_type,
+                local_path=str(path),
+                remote_url=f"{base_url}{url}",
+                file_size=size_bytes,
+                description=description or path.name,
+            )
+            storage.save_attachment(attachment)
+        except Exception as e:
+            logger.warning(f"保存上传文件元数据失败: {e}")
+        
+        return {
+            "attachment_id": attachment_id,
+            "filename": filename,
+            "size_bytes": size_bytes,
+            "url": url,
+        }
+    
     async def _handle_tool_call(self, request_id: str, payload: dict):
         """处理工具调用请求"""
         tool = payload.get("tool", "")
@@ -1115,6 +1440,222 @@ class RemoteBridgeClient:
                 "type": "error",
                 "payload": {"message": "未找到目标请求"}
             })
+    
+    # ========== 文件传输公开 API ==========
+    
+    async def send_file_to_pwa(
+        self,
+        user_id: str,
+        file_path: str,
+        description: str = "",
+        session_id: str = "",
+    ) -> bool:
+        """将本地文件主动分享给指定 PWA 用户
+        
+        用法示例：
+            - 桌面端生成报告后，一键发送到 PWA 查看
+            - 截图后直接分享到手机
+        
+        Args:
+            user_id: 目标用户的 ID
+            file_path: 本地文件路径
+            description: 文件描述（可选）
+            session_id: 会话 ID（可选）
+            
+        Returns:
+            是否发送成功
+        """
+        if not self.is_connected:
+            logger.warning("发送文件失败：Bridge 未连接")
+            return False
+        
+        # 1. 上传文件到服务器
+        upload_result = self._upload_file_to_remote(
+            file_path=file_path,
+            user_id=user_id,
+            session_id=session_id,
+            description=description,
+        )
+        if not upload_result:
+            logger.error(f"上传文件失败: {file_path}")
+            return False
+        
+        # 2. 构建并发送 file_share 消息
+        base_url = self._get_server_base_url()
+        full_url = f"{base_url}{upload_result['url']}"
+        
+        # 推断文件类型
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        file_type = self._categorize_file(
+            upload_result['filename'], 
+            mime_type or "", 
+            "file"
+        )
+        
+        message = {
+            "type": "file_share",
+            "payload": {
+                "user_id": user_id,
+                "session_id": session_id,
+                "files": [{  # 统一使用 files 数组格式，与服务器端一致
+                    "file_id": upload_result["attachment_id"],
+                    "filename": upload_result["filename"],
+                    "file_type": file_type,
+                    "mime_type": mime_type or "application/octet-stream",
+                    "size_bytes": upload_result["size_bytes"],
+                    "url": full_url,
+                    "description": description,
+                }],
+            },
+        }
+        
+        await self._send_raw(message)
+        logger.info(
+            f"已发送 file_share: user={user_id[:8]}, "
+            f"file={upload_result['filename']}"
+        )
+        return True
+    
+    async def send_files_to_pwa(
+        self,
+        user_id: str,
+        file_paths: list[str],
+        message: str = "",
+        session_id: str = "",
+    ) -> bool:
+        """将多个本地文件分享给指定 PWA 用户
+        
+        Args:
+            user_id: 目标用户的 ID
+            file_paths: 本地文件路径列表
+            message: 附带的文字消息
+            session_id: 会话 ID（可选）
+            
+        Returns:
+            是否全部发送成功
+        """
+        if not self.is_connected:
+            return False
+        
+        import mimetypes
+        
+        success_count = 0
+        files = []
+        
+        for file_path in file_paths:
+            result = self._upload_file_to_remote(
+                file_path=file_path,
+                user_id=user_id,
+                session_id=session_id,
+            )
+            if result:
+                success_count += 1
+                mime_type, _ = mimetypes.guess_type(str(file_path))
+                files.append({
+                    "file_id": result["attachment_id"],
+                    "filename": result["filename"],
+                    "file_type": self._categorize_file(result['filename'], mime_type or "", "file"),
+                    "mime_type": mime_type or "application/octet-stream",
+                    "size_bytes": result["size_bytes"],
+                    "url": f"{self._get_server_base_url()}{result['url']}",
+                })
+        
+        if not files:
+            return False
+        
+        await self._send_raw({
+            "type": "file_share",
+            "payload": {
+                "user_id": user_id,
+                "session_id": session_id,
+                "files": files,
+                "message": message,
+            },
+        })
+        
+        logger.info(f"已发送 {success_count}/{len(file_paths)} 个文件到 PWA")
+        return success_count == len(file_paths)
+    
+    async def respond_file_request(
+        self,
+        request_id: str,
+        user_id: str,
+        file_path: str,
+        description: str = "",
+        session_id: str = "",
+    ) -> bool:
+        """响应来自 PWA 的文件请求
+        
+        当用户通过 GUI 选择文件后，调用此方法将文件发送给请求方 PWA。
+        
+        注意：请求映射清理（complete_pwa_request）由服务器端在转发 file_response 后自动执行，
+        桌面端无需也无法调用服务器端的 BridgeConnectionManager。
+        
+        Args:
+            request_id: 原始 file_request 的 request_id
+            user_id: 请求的用户 ID
+            file_path: 要发送的本地文件路径
+            description: 文件描述（可选）
+            session_id: 会话 ID（可选）
+            
+        Returns:
+            是否发送成功
+        """
+        if not self.is_connected:
+            logger.warning("发送文件响应失败：Bridge 未连接")
+            return False
+        
+        # 1. 上传文件到服务器
+        upload_result = self._upload_file_to_remote(
+            file_path=file_path,
+            user_id=user_id,
+            session_id=session_id,
+            description=description,
+        )
+        if not upload_result:
+            # 通知 PWA 上传失败
+            await self._send_error(
+                "FILE_UPLOAD_FAILED",
+                "桌面端上传文件到服务器失败",
+                request_id=request_id,
+            )
+            return False
+        
+        # 2. 构建并发送 file_response 消息
+        base_url = self._get_server_base_url()
+        
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        
+        response_message = {
+            "type": "file_response",
+            "request_id": request_id,  # 关键：沿用原始 request_id 用于路由
+            "payload": {
+                "user_id": user_id,
+                "session_id": session_id,
+                "files": [{
+                    "file_id": upload_result["attachment_id"],
+                    "filename": upload_result["filename"],
+                    "file_type": self._categorize_file(
+                        upload_result['filename'], mime_type or "", "file"
+                    ),
+                    "mime_type": mime_type or "application/octet-stream",
+                    "size_bytes": upload_result["size_bytes"],
+                    "url": f"{base_url}{upload_result['url']}",
+                    "description": description,
+                }],
+                "message": description or "",
+            },
+        }
+        
+        await self._send_raw(response_message)
+        
+        logger.info(
+            f"已发送 file_response: request={request_id[:8]}, "
+            f"user={user_id[:8]}, file={upload_result['filename']}"
+        )
+        return True
     
     # ========== 消息发送方法 ==========
     

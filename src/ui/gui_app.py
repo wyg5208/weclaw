@@ -558,6 +558,14 @@ class WinClawGuiApp:
         self._apply_chat_theme(self._current_theme)
         self._setup_signals()
 
+        # 为 RemoteFileShareTool 注入远程桥接客户端
+        remote_bridge = getattr(self._window, '_remote_bridge', None)
+        if remote_bridge:
+            rfs_tool = self._tool_registry.get_tool("remote_file_share")
+            if rfs_tool and hasattr(rfs_tool, "set_bridge_client"):
+                rfs_tool.set_bridge_client(remote_bridge)
+                logger.info("已为 remote_file_share 工具注入 bridge_client")
+
         # 系统托盘
         self._tray = SystemTray(self._window, self._app)
         self._tray.new_session_requested.connect(self._window._on_new_session)

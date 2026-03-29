@@ -251,6 +251,9 @@ class ToolRegistry:
             kwargs["db_path"] = tool_config.get("db_path", "")
         elif tool_name == "daily_task":
             kwargs["db_path"] = tool_config.get("db_path", "")
+        elif tool_name == "remote_file_share":
+            # 远程文件分享工具无构造参数，bridge_client 通过 set_bridge_client 延迟注入
+            pass
                 
         return kwargs
 

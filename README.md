@@ -2,8 +2,8 @@
 
 > 你的随身 AI 桌面管家 - 51+ 工具 + 移动端远程控制
 
-**版本**: v2.30  
-**更新日期**: 2026 年 3 月 28 日
+**版本**: v3.0.1  
+**更新日期**: 2026 年 3 月 29 日
 
 Weclaw 是一款**轻量级但功能强大**的跨平台 AI 桌面助手。它**身材小巧**（仅 Python 环境即可运行），但**内含 51+ 实用工具**，从文件管理、浏览器自动化到语音交互 OCR 识别样样精通。
 
@@ -472,6 +472,82 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 
 ## 版本日志
 
+## 最新版本 (v3.0.1)
+
+**发布日期**: 2026-03-29
+
+### Bug修复 🔧
+
+#### PWA 文件上传认证修复 🔐
+- ✅ 修复 `remote_file_share.send_file` 上传文件到服务器返回 401 Unauthorized 的问题
+- ✅ 新增 `_get_valid_access_token()` 三级 token 管理（config → keystore → refresh）
+- ✅ 新增 `X-Device-Fingerprint` 主认证 + JWT 后备的双认证策略
+- ✅ 设备指纹从局部变量升级为 `self._device_fingerprint` 实例缓存
+- ✅ 401 失败自动刷新 token 后重试，错误日志记录具体 HTTP 状态码
+
+#### 工具链一致性修复 🔗
+- ✅ `pdf_generator` 同步注册到 INTENT_TOOL_MAPPING、known_prefixes 两处
+- ✅ 修复 `tools.json` 中 `pdf_generator` 依赖引用不存在的 `markdown_content`
+- ✅ `validate_tool_chain.py` 7 项检查全部通过
+
+### 技术改进 📝
+- 📝 涉及文件：5 个修改，client.py 净增约 120 行代码
+- 📝 Bridge WebSocket 与 HTTP API 认证机制统一（device_fingerprint + JWT 双通道）
+
+---
+
+## 最新版本 (v3.0.0)
+
+**发布日期**: 2026-03-29
+
+### 重大功能新增 🚀
+
+#### 桌面端与PWA文件双向传输改造 📂
+
+**第一阶段：文件传输基础设施（client.py）**
+- ✅ 新增 `_get_server_base_url()` - ws→http URL 转换工具
+- ✅ 新增 `_upload_file_to_remote()` - HTTP POST 上传本地文件到服务器
+- ✅ 新增 `_handle_file_request()` - 处理 PWA 的文件请求
+- ✅ 新增 `send_file_to_pwa()` - 主动推送单文件到 PWA
+- ✅ 新增 `send_files_to_pwa()` - 批量推送多文件到 PWA
+- ✅ 新增 `respond_file_request()` - 响应 PWA 文件请求
+- ✅ WebSocket 协议扩展：新增 file_share、file_response、file_request 三种消息类型
+- ✅ client.py 净增 415 行代码（1191行 → 1606行）
+
+**第二阶段：Agent 工具注册（remote_file_share）**
+- ✅ 新增 `RemoteFileShareTool` 工具（320行），支持 3 个 Action：send_file、send_files、send_voice
+- ✅ 意图识别新增 communication 类别，18 个中文关键词触发
+- ✅ LLM 生成文件后自动调用 remote_file_share 发送到 PWA
+- ✅ 延迟依赖注入：bridge_client 通过 set_bridge_client() 在 GUI 初始化后注入
+
+### 技术改进 📝
+- 📝 涉及文件：1 个新增 + 7 个修改，覆盖 remote_client、tools、core、ui 四大模块
+- 📝 修复 `event_bus.emit` 缺少 await 的异步调用问题
+- 📝 `_build_remote_attachment_context()` 重构复用公共上传方法
+- 📝 validate_tool_chain.py 验证脚本同步更新
+
+---
+
+## 最新版本 (v2.30.1)
+
+**发布日期**: 2026-03-28
+
+### Bug修复 + 性能优化 🔧
+
+#### 文件路径上下文注入 🗂️
+
+- ✅ 新增文件路径追踪机制：AI生成文件后能记住文件位置
+- ✅ 新增 `get_generated_files_context()` 方法：生成文件路径上下文注入到系统提示
+- ✅ 新增 `_track_generated_file()` 方法：跟踪生成的文件（最多20个）
+- ✅ 修改 `_check_and_emit_file_generated()` 方法：自动记录生成的文件
+- ✅ 在系统提示中注入文件上下文：确保文件路径不被TOKEN截断
+
+#### 工具并行执行优化 ⚡
+
+- ✅ 将 `process_deferred_tools` 中串行工具执行改为并行执行
+- ✅ 使用 `asyncio.gather` 同时执行多个无依赖的工具调用
+- ✅ 添加异常处理：一个工具失败不影响其他工具
+
 ## 最新版本 (v2.29.1)
 
 **发布日期**: 2026-03-28
@@ -621,6 +697,26 @@ A: 检查音频设备权限，确保已安装 `portaudio` 和相关系统库
 - 📝 工具总数：54 个启用工具
 
 ---
+### v3.0.1 (2026-03-29)
+- ✅ 修复 PWA 文件上传 401 认证失败：新增 device_fingerprint 主认证 + JWT 自动刷新后备
+- ✅ 新增 `_get_valid_access_token()` 三级 token 管理方法
+- ✅ 设备指纹缓存为实例属性，WebSocket 和 HTTP 共用
+- ✅ pdf_generator 工具链三处注册点同步修复
+- ✅ validate_tool_chain.py 7 项检查全部通过
+
+---
+
+### v3.0.0 (2026-03-29)
+- ✅ 桌面端与PWA文件双向传输改造：新增 6 个文件传输核心方法（client.py 净增 415 行）
+- ✅ 新增 RemoteFileShareTool 工具（320行）：send_file、send_files、send_voice 三个 Action
+- ✅ WebSocket 协议扩展：file_share、file_response、file_request 三种消息类型
+- ✅ 意图识别新增 communication 类别，18 个中文关键词触发
+- ✅ LLM 自动调用文件发送：生成文件后自动推送到 PWA 端
+- ✅ 延迟依赖注入模式：bridge_client 在 GUI 初始化后注入工具
+- ✅ 修复 event_bus.emit 缺少 await 的异步调用问题
+
+---
+
 ### v2.26.0 (2026-03-28)
 - ✅ 修复 CFTA 模式 DSML 乱码：DeepSeek 流式输出工具调用标记不再渗入聊天文本和 TTS
 - ✅ 强化 music_player 工具路由：系统提示新增强制规则 + 意图识别补充 6 个关键词
@@ -1355,7 +1451,7 @@ Weclaw 基于 Python 开发，天生具有跨平台能力。虽然主要在 Wind
 让 AI 成为你的效率助手！（Windows/macOS/Linux）
 
 
-**当前版本**: v2.28.0 (2026-03-28)
+**当前版本**: v3.0.1 (2026-03-29)
 
 
 

@@ -748,6 +748,13 @@ INTENT_CATEGORIES: dict[str, list[str]] = {
         # 补充变体：支持 "搜索...论文" 等表达
         "相关论文", "搜索论文", "检索论文",
     ],
+    "communication": [
+        "发送文件", "发文件到手机", "传文件", "分享文件",
+        "发到PWA", "发送到手机", "传到手机", "发给手机",
+        "发送语音", "语音消息", "发语音", "录音发送",
+        "远程分享", "远程发送", "文件传输", "文件分享",
+        "发到浏览器", "发送到浏览器",
+    ],
 }
 
 # 需要排除 assembly 意图的关键词（这些任务不是文档组装）
@@ -788,10 +795,10 @@ INTENT_TOOL_MAPPING: dict[str, list[str]] = {
         "document_scanner",  # 高拍仪文档扫描
         "music_player",  # 歌曲库
     ],
-    "communication": ["wechat"],
+    "communication": ["wechat", "remote_file_share"],
     # ==================== 新增7个意图的工具映射 ====================
     "document_processing": [
-        "pdf_tool", "format_converter", "ppt_generator",
+        "pdf_tool", "format_converter", "ppt_generator", "pdf_generator",
     ],
     "data_analysis": [
         "data_processor", "data_visualization", "financial_report",
@@ -887,6 +894,10 @@ INTENT_PRIORITY_MAP: dict[str, dict[str, list[str]]] = {
     "research": {
         "recommended": ["literature_search"],
         "alternative": ["knowledge_rag", "search"],
+    },
+    "communication": {
+        "recommended": ["wechat", "remote_file_share"],
+        "alternative": [],
     },
 }
 

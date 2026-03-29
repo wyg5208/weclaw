@@ -642,7 +642,7 @@
         "require_confirmation": false
       },
       "dependencies": {
-        "input_sources": ["doc_generator", "markdown_content"],
+        "input_sources": ["doc_generator"],
         "standalone": false,
         "description": "PDF 生成器，需要内容输入源"
       },
@@ -1187,6 +1187,23 @@
         "start_task", "complete_task", "cancel_task",
         "get_today_summary", "generate_recommendations", "accept_recommendations"
       ]
+    },
+    "remote_file_share": {
+      "enabled": true,
+      "module": "src.tools.remote_file_share",
+      "class": "RemoteFileShareTool",
+      "display": {
+        "name": "远程文件分享",
+        "emoji": "📤",
+        "description": "将桌面端本地文件发送到 PWA 端（手机/浏览器），支持文档、图片、语音等所有类型",
+        "category": "communication"
+      },
+      "config": {},
+      "security": {
+        "risk_level": "low",
+        "require_confirmation": false
+      },
+      "actions": ["send_file", "send_files", "send_voice"]
     }
   },
   "categories": {

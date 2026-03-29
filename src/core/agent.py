@@ -298,6 +298,10 @@ class Agent:
         # 任务执行状态跟踪器 - 用于智能锚定消息
         self._execution_tracker = ExecutionTracker()
 
+        # 【新增】文件路径上下文注入 - 跟踪最近生成的文件，确保AI知道文件位置
+        self._recent_generated_files: list[dict[str, str]] = []  # [{"path": str, "name": str, "time": str}, ...]
+        self._max_tracked_files = 20  # 最多跟踪20个最近生成的文件
+
         # 请求序列化锁：防止多路并发请求（本地+远程PWA）同时修改 session 历史
         # asyncio.Lock 必须在事件循环已启动后才能创建，使用懒加载
         self._chat_lock: asyncio.Lock | None = None
@@ -625,6 +629,76 @@ class Agent:
         except Exception as e:
             logger.error(f"意识系统懒启动失败：{e}")
 
+    def get_generated_files_context(self) -> str:
+        """生成文件路径上下文信息，注入到系统提示中。
+        
+        这确保AI知道最近生成的文件位置，在后续对话中可以引用这些文件。
+        
+        Returns:
+            文件上下文字符串，如果无文件则返回空字符串
+        """
+        if not self._recent_generated_files:
+            return ""
+        
+        # 只保留最近的文件（按时间倒序）
+        recent = list(reversed(self._recent_generated_files[-10:]))  # 最多显示10个
+        
+        lines = [
+            "",
+            "=" * 50,
+            "[重要] 最近生成的文件（请记住这些路径以便后续引用）：",
+        ]
+        
+        # 按文件类型分组显示
+        by_ext: dict[str, list[dict]] = {}
+        for f in recent:
+            ext = f.get("name", "").split(".")[-1] if "." in f.get("name", "") else "other"
+            if ext not in by_ext:
+                by_ext[ext] = []
+            by_ext[ext].append(f)
+        
+        for ext, files in by_ext.items():
+            lines.append(f"\n📁 .{ext} 文件 ({len(files)}个)：")
+            for f in files:
+                lines.append(f"   • {f['name']}")
+                lines.append(f"     路径: {f['path']}")
+        
+        lines.append("=" * 50)
+        
+        return "\n".join(lines)
+    
+    def _track_generated_file(self, file_path: str, file_name: str) -> None:
+        """跟踪新生成的文件。
+        
+        Args:
+            file_path: 文件的绝对路径
+            file_name: 文件名
+        """
+        from datetime import datetime
+        
+        # 检查是否已存在（避免重复）
+        for existing in self._recent_generated_files:
+            if existing["path"] == file_path:
+                # 更新时间
+                existing["time"] = datetime.now().isoformat(timespec="seconds")
+                return
+        
+        # 添加新文件
+        self._recent_generated_files.append({
+            "path": file_path,
+            "name": file_name,
+            "time": datetime.now().isoformat(timespec="seconds"),
+        })
+        
+        # 保持最大数量限制
+        if len(self._recent_generated_files) > self._max_tracked_files:
+            self._recent_generated_files.pop(0)
+        
+        logger.info(
+            "[文件追踪] 已记录生成文件: %s -> %s",
+            file_name, file_path,
+        )
+    
     # ------------------------------------------------------------------
     # 文件生成检测
     # ------------------------------------------------------------------
@@ -644,7 +718,10 @@ class Agent:
         result,
         session_id: str,
     ) -> None:
-        """检查工具执行结果是否产生了文件，如果是则发出 FILE_GENERATED 事件。"""
+        """检查工具执行结果是否产生了文件，如果是则发出 FILE_GENERATED 事件。
+        
+        同时将文件路径记录到 _recent_generated_files，以便注入到后续对话的上下文中。
+        """
         if not result.is_success:
             return
 
@@ -660,6 +737,9 @@ class Agent:
         p = _P(file_path)
         if not p.exists() or not p.is_file():
             return
+
+        # 【新增】跟踪生成的文件到上下文
+        self._track_generated_file(str(p), p.name)
 
         # 判断是否为文件写入类动作
         is_file_gen = (tool_name, action_name) in self._FILE_GEN_ACTIONS
@@ -785,6 +865,12 @@ class Agent:
                     logger.debug("意识上下文已注入提示词")
             except Exception as e:
                 logger.error(f"注入意识上下文失败: {e}")
+        
+        # 【新增】注入文件路径上下文 - 确保AI知道最近生成的文件位置
+        files_context = self.get_generated_files_context()
+        if files_context:
+            dynamic_system_prompt += files_context
+            logger.debug("文件路径上下文已注入提示词")
         
         self.session_manager.update_system_prompt(dynamic_system_prompt)
 
@@ -1370,6 +1456,12 @@ class Agent:
                     logger.debug("意识上下文已注入提示词")
             except Exception as e:
                 logger.error(f"注入意识上下文失败: {e}")
+        
+        # 【新增】注入文件路径上下文 - 确保AI知道最近生成的文件位置
+        files_context = self.get_generated_files_context()
+        if files_context:
+            dynamic_system_prompt += files_context
+            logger.debug("文件路径上下文已注入提示词")
         
         self.session_manager.update_system_prompt(dynamic_system_prompt)
 
@@ -2095,7 +2187,9 @@ class Agent:
             executed_tools: list[str] = []
             result_parts: list[str] = []
 
-            for tc in tool_calls:
+            # 【优化】将串行工具执行改为并行执行
+            async def execute_single_tool(tc) -> tuple[str, str, Any]:
+                """执行单个工具调用的辅助函数。"""
                 func_name = tc.function.name
                 try:
                     arguments = json.loads(tc.function.arguments)
@@ -2135,7 +2229,24 @@ class Agent:
                     result.status.value, result.duration_ms,
                 )
 
+                return tool_name, action_name, result
+
+            # 并行执行所有工具调用
+            tool_results = await asyncio.gather(
+                *[execute_single_tool(tc) for tc in tool_calls],
+                return_exceptions=True,
+            )
+
+            # 处理结果
+            for i, res in enumerate(tool_results):
+                if isinstance(res, Exception):
+                    logger.error("[CFTA-deferred] 工具执行异常: %s", res)
+                    result_parts.append(f"工具{i+1}: 执行失败 - {str(res)}")
+                    continue
+
+                tool_name, action_name, result = res
                 executed_tools.append(f"{tool_name}.{action_name}")
+
                 if result.is_success:
                     result_parts.append(
                         f"{tool_name}.{action_name}: {result.output[:200]}"

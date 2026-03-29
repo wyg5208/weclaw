@@ -84,7 +84,7 @@ def get_known_prefixes() -> set[str]:
         "knowledge_rag", "batch_paper_analyzer", "user_profile",
         "course_schedule", "mind_map", "resume_builder", "data_processor",
         "coding_assistant", "data_visualization", "speech_to_text",
-        "format_converter", "id_photo", "literature_search", "pdf_tool",
+        "format_converter", "id_photo", "literature_search", "pdf_tool", "pdf_generator",
         "gif_maker", "ai_writer", "education_tool", "ppt_generator",
         "financial_report", "contract_generator", "family_member", "meal_menu",
         "document_scanner",  # 高拍仪文档扫描
@@ -93,6 +93,7 @@ def get_known_prefixes() -> set[str]:
         "family_milestone",  # 家庭大事记
         "todo",  # 待办事项
         "daily_task",  # 每日任务
+        "remote_file_share",  # 远程文件分享
     }
 
 
